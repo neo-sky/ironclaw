@@ -1,6 +1,6 @@
 // arch-exempt: large_file, needs Reborn composition helper extraction, plan #4469
 use std::{
-    collections::VecDeque,
+    collections::{BTreeMap, VecDeque},
     path::{Path, PathBuf},
     sync::atomic::AtomicBool,
     sync::{Arc, OnceLock},
@@ -40,6 +40,10 @@ use crate::extension_host::{
     },
 };
 use crate::input::{RebornLocalRuntimeIdentity, RebornRuntimeProcessBinding, RebornStorageInput};
+use crate::ironhub::{
+    extend_builtin_first_party_package as extend_builtin_first_party_package_with_ironhub,
+    insert_handlers as insert_ironhub_handlers,
+};
 use crate::lifecycle_auth_continuation::{
     LifecycleAuthContinuationDispatcher, LifecycleProductFacadeSlot,
 };
@@ -76,7 +80,7 @@ use ironclaw_conversations::{InboundTurnError, RebornFilesystemConversationServi
 use ironclaw_events::{DurableAuditLog, DurableEventLog};
 use ironclaw_extensions::{
     ExtensionInstallationStore, ExtensionLifecycleService, ExtensionRegistry,
-    FilesystemExtensionInstallationStore, SharedExtensionRegistry,
+    FilesystemExtensionInstallationStore, ManifestSource, SharedExtensionRegistry,
 };
 use ironclaw_filesystem::LibSqlRootFilesystem;
 use ironclaw_filesystem::PostgresRootFilesystem;
@@ -1706,22 +1710,6 @@ async fn build_local_runtime(input: RebornBuildInput) -> Result<RebornServices, 
         ),
     ));
     services = attach_wasm_runtime(services)?;
-    let mut available_extensions = AvailableExtensionCatalog::from_filesystem_root(
-        filesystem.as_ref(),
-        &VirtualPath::new("/system/extensions")?,
-    )
-    .await
-    .map_err(|error| RebornBuildError::InvalidConfig {
-        reason: format!("available extension catalog could not be loaded: {error}"),
-    })?;
-    available_extensions.extend(
-        AvailableExtensionCatalog::from_first_party_assets_with_nearai_mcp_config(
-            nearai_mcp_bootstrap_config.as_ref(),
-        )
-        .map_err(|error| RebornBuildError::InvalidConfig {
-            reason: format!("first-party extension catalog could not be loaded: {error}"),
-        })?,
-    );
     let extension_filesystem: Arc<dyn RootFilesystem> = filesystem.clone();
     let extension_host_ports =
         ironclaw_host_runtime::default_host_port_catalog().map_err(|error| {
@@ -1745,6 +1733,26 @@ async fn build_local_runtime(input: RebornBuildInput) -> Result<RebornServices, 
         .await
         .map_err(|error| RebornBuildError::InvalidConfig {
             reason: format!("extension installation state could not be loaded: {error}"),
+        })?,
+    );
+    let manifest_sources =
+        available_extension_manifest_sources(extension_installation_store.as_ref()).await?;
+    let mut available_extensions =
+        AvailableExtensionCatalog::from_filesystem_root_with_manifest_sources(
+            filesystem.as_ref(),
+            &VirtualPath::new("/system/extensions")?,
+            &manifest_sources,
+        )
+        .await
+        .map_err(|error| RebornBuildError::InvalidConfig {
+            reason: format!("available extension catalog could not be loaded: {error}"),
+        })?;
+    available_extensions.extend(
+        AvailableExtensionCatalog::from_first_party_assets_with_nearai_mcp_config(
+            nearai_mcp_bootstrap_config.as_ref(),
+        )
+        .map_err(|error| RebornBuildError::InvalidConfig {
+            reason: format!("first-party extension catalog could not be loaded: {error}"),
         })?,
     );
     let extension_lifecycle_service = Arc::new(tokio::sync::Mutex::new(
@@ -1895,11 +1903,19 @@ async fn build_local_runtime(input: RebornBuildInput) -> Result<RebornServices, 
     )?;
     insert_extension_lifecycle_handlers(
         &mut first_party_registry,
-        extension_management,
+        Arc::clone(&extension_management),
         product_auth.runtime_credential_account_selection_service(),
     )
     .map_err(|error| RebornBuildError::InvalidConfig {
         reason: format!("local-dev extension lifecycle handlers are invalid: {error}"),
+    })?;
+    insert_ironhub_handlers(
+        &mut first_party_registry,
+        Arc::clone(&store_graph.local_runtime.skill_management),
+        extension_management,
+    )
+    .map_err(|error| RebornBuildError::InvalidConfig {
+        reason: format!("local-dev IronHub handlers are invalid: {error}"),
     })?;
     services = services.with_first_party_capabilities(Arc::new(first_party_registry));
 
@@ -2191,6 +2207,25 @@ where
     F: RootFilesystem + 'static,
 {
     FilesystemTurnStateRowStore::new(filesystem).with_limits(limits)
+}
+
+async fn available_extension_manifest_sources(
+    installation_store: &dyn ExtensionInstallationStore,
+) -> Result<BTreeMap<String, ManifestSource>, RebornBuildError> {
+    let manifests = installation_store.list_manifests().await.map_err(|error| {
+        RebornBuildError::InvalidConfig {
+            reason: format!("extension installation manifests could not be loaded: {error}"),
+        }
+    })?;
+    Ok(manifests
+        .into_iter()
+        .map(|record| {
+            (
+                record.manifest().id.as_str().to_string(),
+                record.manifest().source,
+            )
+        })
+        .collect())
 }
 
 fn local_dev_extension_installation_state_path(
@@ -3794,6 +3829,11 @@ fn local_dev_builtin_extension_registry() -> Result<ExtensionRegistry, RebornBui
     let package = extend_builtin_first_party_package(package).map_err(|error| {
         RebornBuildError::InvalidConfig {
             reason: format!("local-dev extension lifecycle package is invalid: {error}"),
+        }
+    })?;
+    let package = extend_builtin_first_party_package_with_ironhub(package).map_err(|error| {
+        RebornBuildError::InvalidConfig {
+            reason: format!("local-dev IronHub package is invalid: {error}"),
         }
     })?;
     registry

@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use axum::Router;
 use axum::routing::{delete, get, post, put};
-use ironclaw_product_workflow::RebornServicesApi;
+use ironclaw_product_workflow::{IronhubLinkService, RebornServicesApi};
 use serde::Serialize;
 
 use crate::webui_v2::descriptors::{
@@ -24,7 +24,8 @@ use crate::webui_v2::descriptors::{
     WEBUI_V2_PATTERN_GET_ATTACHMENT, WEBUI_V2_PATTERN_GET_LLM_CONFIG,
     WEBUI_V2_PATTERN_GET_RUN_ARTIFACT, WEBUI_V2_PATTERN_GET_SESSION, WEBUI_V2_PATTERN_GET_TIMELINE,
     WEBUI_V2_PATTERN_IMPORT_EXTENSION, WEBUI_V2_PATTERN_INSTALL_EXTENSION,
-    WEBUI_V2_PATTERN_INSTALL_SKILL, WEBUI_V2_PATTERN_LIST_AUTOMATIONS,
+    WEBUI_V2_PATTERN_INSTALL_SKILL, WEBUI_V2_PATTERN_IRONHUB_DELIVER_INSTALL,
+    WEBUI_V2_PATTERN_LIST_AUTOMATIONS,
     WEBUI_V2_PATTERN_LIST_CONNECTABLE_CHANNELS, WEBUI_V2_PATTERN_LIST_EXTENSION_REGISTRY,
     WEBUI_V2_PATTERN_LIST_EXTENSIONS, WEBUI_V2_PATTERN_LIST_FS_MOUNTS,
     WEBUI_V2_PATTERN_LIST_LLM_MODELS, WEBUI_V2_PATTERN_LIST_PROJECT_FILES,
@@ -91,6 +92,8 @@ impl WebUiV2RouteOptions {
 #[derive(Clone)]
 pub struct WebUiV2State {
     services: Arc<dyn RebornServicesApi>,
+    // arch-exempt: optional_arc, wired only when an IronHub agent shared key is configured, plan #6320
+    ironhub_link: Option<Arc<dyn IronhubLinkService>>,
     sse_capacity: Arc<SseCapacity>,
     reborn_projects_enabled: bool,
 }
@@ -107,9 +110,19 @@ impl WebUiV2State {
     ) -> Self {
         Self {
             services,
+            ironhub_link: None,
             sse_capacity: Arc::new(SseCapacity::new(max_concurrent_streams_per_caller)),
             reborn_projects_enabled: false,
         }
+    }
+
+    pub fn with_ironhub_link(mut self, ironhub_link: Option<Arc<dyn IronhubLinkService>>) -> Self {
+        self.ironhub_link = ironhub_link;
+        self
+    }
+
+    pub(crate) fn ironhub_link(&self) -> Option<&Arc<dyn IronhubLinkService>> {
+        self.ironhub_link.as_ref()
     }
 
     /// Deployment gate for the Reborn Projects WebUI surface (the sidebar
@@ -331,6 +344,10 @@ pub fn webui_v2_router_with_options(state: WebUiV2State, options: WebUiV2RouteOp
         .route(
             WEBUI_V2_PATTERN_INSTALL_EXTENSION,
             post(handlers::install_extension),
+        )
+        .route(
+            WEBUI_V2_PATTERN_IRONHUB_DELIVER_INSTALL,
+            post(handlers::ironhub_deliver_install),
         )
         .route(
             WEBUI_V2_PATTERN_ACTIVATE_EXTENSION,

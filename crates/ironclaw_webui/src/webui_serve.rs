@@ -663,6 +663,7 @@ pub fn webui_v2_app_with_lifecycle(
         WebUiV2RouteOptions::without_operator_routes()
     };
     let v2_state = WebUiV2State::new(bundle.api.clone(), DEFAULT_SSE_MAX_CONCURRENT_PER_CALLER)
+        .with_ironhub_link(bundle.ironhub_link.clone())
         .with_reborn_projects_enabled(reborn_projects_enabled());
     let v2_inner: Router<()> = webui_v2_router_with_options(v2_state, route_options).with_state(());
 

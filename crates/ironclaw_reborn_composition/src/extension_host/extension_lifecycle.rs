@@ -12,7 +12,7 @@ use ironclaw_extensions::{
     ExtensionLifecycleService, ExtensionManifestRecord, ExtensionManifestRef, ExtensionPackage,
     InstallationOwner, ManifestHash, ManifestSource, canonicalize_installation_rows,
 };
-use ironclaw_filesystem::{FilesystemError, RootFilesystem};
+use ironclaw_filesystem::{FileType, FilesystemError, RootFilesystem};
 use ironclaw_host_api::{
     CapabilityDescriptor, CapabilityId, EffectKind, ExtensionId, NetworkTargetPattern,
     PermissionMode, ResourceScope, RuntimeCredentialAccountProviderId,
@@ -940,6 +940,195 @@ impl RebornLocalExtensionManagementPort {
             return Err(error);
         }
         Ok(())
+    }
+
+    /// Install a caller-supplied package (the IronHub catalog path). `force`
+    /// replaces an occupied id in place with rollback on failure; without it
+    /// an occupied id is rejected rather than joining the member set.
+    pub(crate) async fn install_available_package(
+        &self,
+        available: &AvailableExtensionPackage,
+        force: bool,
+        caller: &UserId,
+    ) -> Result<LifecycleProductResponse, ProductWorkflowError> {
+        let package_ref = available.package_ref.clone();
+        let installation_id =
+            ExtensionInstallationId::new(available.package.id.as_str().to_string())
+                .map_err(map_extension_installation_error)?;
+        let _operation_guard = self.operation_lock.lock().await;
+        if force
+            && let Some(replacement) = self
+                .forced_replacement_state(available, &installation_id)
+                .await?
+        {
+            let owner = derive_owner(caller, &self.tenant_operator_user_id);
+            let plan = prepare_install(available, owner)?;
+            return self
+                .replace_available_package(available, plan, replacement)
+                .await;
+        }
+        self.ensure_not_installed(&available.package.id, &installation_id)
+            .await?;
+        self.install_fresh_locked(available, caller).await?;
+
+        Ok(response_with_payload(
+            Some(package_ref.clone()),
+            LifecyclePhase::Installed,
+            LifecycleProductPayload::ExtensionInstall {
+                installed: true,
+                visible_capability_ids: visible_capability_ids(available)
+                    .map(|id| id.as_str().to_string())
+                    .collect(),
+                next_step: format!(
+                    "Call builtin.extension_activate now with input {{\"extension_id\":\"{}\"}}. Activation publishes the tools and opens the auth gate if credentials are missing.",
+                    package_ref.id.as_str()
+                ),
+            },
+        ))
+    }
+
+    async fn forced_replacement_state(
+        &self,
+        available: &AvailableExtensionPackage,
+        installation_id: &ExtensionInstallationId,
+    ) -> Result<Option<ForcedExtensionReplacement>, ProductWorkflowError> {
+        let Some(installation) = self
+            .installation_store
+            .get_installation(installation_id)
+            .await
+            .map_err(map_extension_installation_error)?
+        else {
+            return Ok(None);
+        };
+        if installation.extension_id() != &available.package.id {
+            return Err(ProductWorkflowError::InvalidBindingRequest {
+                reason: format!(
+                    "installation {} does not belong to extension {}",
+                    installation_id.as_str(),
+                    available.package.id.as_str()
+                ),
+            });
+        }
+        let manifest = self
+            .installation_store
+            .get_manifest(&available.package.id)
+            .await
+            .map_err(map_extension_installation_error)?
+            .ok_or_else(|| ProductWorkflowError::InvalidBindingRequest {
+                reason: format!(
+                    "extension {} manifest is not installed",
+                    available.package.id.as_str()
+                ),
+            })?;
+        let previous_state = installation.activation_state();
+        let lifecycle_package = self.lifecycle_package(&available.package.id).await?;
+        let files = self
+            .backup_materialized_extension_files(&available.package.id)
+            .await?;
+        Ok(Some(ForcedExtensionReplacement {
+            manifest,
+            installation,
+            lifecycle_package,
+            previous_state,
+            files,
+        }))
+    }
+
+    async fn replace_available_package(
+        &self,
+        available: &AvailableExtensionPackage,
+        plan: ExtensionInstallPlan,
+        replacement: ForcedExtensionReplacement,
+    ) -> Result<LifecycleProductResponse, ProductWorkflowError> {
+        let package_ref = available.package_ref.clone();
+        if let Err(error) = self
+            .installation_store
+            .set_activation_state(
+                replacement.installation.installation_id(),
+                ExtensionActivationState::Disabled,
+            )
+            .await
+        {
+            return Err(map_extension_installation_error(error));
+        }
+        if let Err(error) = self
+            .active_extensions
+            .unpublish(&replacement.lifecycle_package)
+        {
+            if let Err(restore_error) = self
+                .installation_store
+                .set_activation_state(
+                    replacement.installation.installation_id(),
+                    replacement.previous_state,
+                )
+                .await
+                .map_err(map_extension_installation_error)
+            {
+                return Err(compensation_failure(
+                    "extension force install failed to unpublish active package and activation restore failed",
+                    error,
+                    restore_error,
+                ));
+            }
+            return Err(error);
+        }
+        if let Err(error) = self.replace_lifecycle_package(&available.package).await {
+            if let Err(restore_error) = self.restore_active_publication(
+                &replacement.lifecycle_package,
+                replacement.previous_state,
+            ) {
+                return Err(compensation_failure(
+                    "extension force install failed to update lifecycle package and active publication restore failed",
+                    error,
+                    restore_error,
+                ));
+            }
+            if let Err(restore_error) = self
+                .installation_store
+                .set_activation_state(
+                    replacement.installation.installation_id(),
+                    replacement.previous_state,
+                )
+                .await
+                .map_err(map_extension_installation_error)
+            {
+                return Err(compensation_failure(
+                    "extension force install failed to update lifecycle package and activation restore failed",
+                    error,
+                    restore_error,
+                ));
+            }
+            return Err(error);
+        }
+        if let Err(error) = self
+            .clear_materialized_extension_files(&replacement.files.root)
+            .await
+        {
+            return self.rollback_forced_replacement(replacement, error).await;
+        }
+        if let Err(error) =
+            materialize_available_extension(self.filesystem.as_ref(), available).await
+        {
+            return self.rollback_forced_replacement(replacement, error).await;
+        }
+        if let Err(error) = self.persist_replacement_plan(plan).await {
+            return self.rollback_forced_replacement(replacement, error).await;
+        }
+
+        Ok(response_with_payload(
+            Some(package_ref.clone()),
+            LifecyclePhase::Installed,
+            LifecycleProductPayload::ExtensionInstall {
+                installed: true,
+                visible_capability_ids: visible_capability_ids(available)
+                    .map(|id| id.as_str().to_string())
+                    .collect(),
+                next_step: format!(
+                    "Call builtin.extension_activate now with input {{\"extension_id\":\"{}\"}}. Activation publishes the tools and opens the auth gate if credentials are missing.",
+                    package_ref.id.as_str()
+                ),
+            },
+        ))
     }
 
     pub(crate) async fn activate(
@@ -1967,6 +2156,21 @@ impl RebornLocalExtensionManagementPort {
             .map_err(map_extension_error)
     }
 
+    async fn replace_lifecycle_package(
+        &self,
+        package: &ExtensionPackage,
+    ) -> Result<(), ProductWorkflowError> {
+        let mut lifecycle = self.lifecycle_service.lock().await;
+        lifecycle
+            .remove(&package.id)
+            .await
+            .map_err(map_extension_error)?;
+        lifecycle
+            .install(package.clone())
+            .await
+            .map_err(map_extension_error)
+    }
+
     async fn rollback_lifecycle_install(
         &self,
         extension_id: &ExtensionId,
@@ -1984,6 +2188,12 @@ impl RebornLocalExtensionManagementPort {
         previous_state: ExtensionActivationState,
     ) -> Result<(), ProductWorkflowError> {
         let mut lifecycle = self.lifecycle_service.lock().await;
+        if lifecycle.registry().get_extension(&package.id).is_some() {
+            lifecycle
+                .remove(&package.id)
+                .await
+                .map_err(map_extension_error)?;
+        }
         lifecycle
             .install(package.clone())
             .await
@@ -2005,12 +2215,118 @@ impl RebornLocalExtensionManagementPort {
         Ok(())
     }
 
+    async fn backup_materialized_extension_files(
+        &self,
+        extension_id: &ExtensionId,
+    ) -> Result<ExtensionFileBackup, ProductWorkflowError> {
+        let root = VirtualPath::new(format!("/system/extensions/{}", extension_id.as_str()))
+            .map_err(|error| ProductWorkflowError::InvalidBindingRequest {
+                reason: format!("invalid extension root path: {error}"),
+            })?;
+        let mut files = Vec::new();
+        let mut pending = vec![root.clone()];
+        while let Some(directory) = pending.pop() {
+            let entries = match self.filesystem.list_dir(&directory).await {
+                Ok(entries) => entries,
+                Err(FilesystemError::NotFound { .. })
+                | Err(FilesystemError::MountNotFound { .. })
+                    if directory == root =>
+                {
+                    Vec::new()
+                }
+                Err(error) => {
+                    return Err(ProductWorkflowError::Transient {
+                        reason: format!("failed to inspect extension files for backup: {error}"),
+                    });
+                }
+            };
+            for entry in entries {
+                match entry.file_type {
+                    FileType::File => {
+                        let bytes =
+                            self.filesystem
+                                .read_file(&entry.path)
+                                .await
+                                .map_err(|error| ProductWorkflowError::Transient {
+                                    reason: format!(
+                                        "failed to read extension file for backup: {error}"
+                                    ),
+                                })?;
+                        files.push((entry.path, bytes));
+                    }
+                    FileType::Directory => pending.push(entry.path),
+                    FileType::Symlink | FileType::Other => {
+                        return Err(ProductWorkflowError::Transient {
+                            reason: format!(
+                                "extension file backup rejected non-file entry {}",
+                                entry.path.as_str()
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+        Ok(ExtensionFileBackup { root, files })
+    }
+
+    async fn restore_materialized_extension_files(
+        &self,
+        backup: &ExtensionFileBackup,
+    ) -> Result<(), ProductWorkflowError> {
+        self.clear_materialized_extension_files(&backup.root)
+            .await?;
+        for (path, bytes) in &backup.files {
+            self.filesystem
+                .write_file(path, bytes)
+                .await
+                .map_err(|error| ProductWorkflowError::Transient {
+                    reason: format!(
+                        "failed to restore extension file {}: {error}",
+                        path.as_str()
+                    ),
+                })?;
+        }
+        Ok(())
+    }
+
+    async fn clear_materialized_extension_files(
+        &self,
+        root: &VirtualPath,
+    ) -> Result<(), ProductWorkflowError> {
+        match self.filesystem.delete(root).await {
+            Ok(())
+            | Err(FilesystemError::NotFound { .. })
+            | Err(FilesystemError::MountNotFound { .. }) => {}
+            Err(error) => {
+                return Err(ProductWorkflowError::Transient {
+                    reason: format!("failed to clear replaced extension files: {error}"),
+                });
+            }
+        }
+        Ok(())
+    }
+
     async fn restore_installation(
         &self,
         installation: &ExtensionInstallation,
     ) -> Result<(), ProductWorkflowError> {
         self.installation_store
             .upsert_installation(installation.clone())
+            .await
+            .map_err(map_extension_installation_error)
+    }
+
+    async fn restore_installation_records(
+        &self,
+        manifest: ExtensionManifestRecord,
+        installation: ExtensionInstallation,
+    ) -> Result<(), ProductWorkflowError> {
+        self.installation_store
+            .upsert_manifest(manifest)
+            .await
+            .map_err(map_extension_installation_error)?;
+        self.installation_store
+            .upsert_installation(installation)
             .await
             .map_err(map_extension_installation_error)
     }
@@ -2062,6 +2378,63 @@ impl RebornLocalExtensionManagementPort {
         Ok(())
     }
 
+    async fn persist_replacement_plan(
+        &self,
+        plan: ExtensionInstallPlan,
+    ) -> Result<(), ProductWorkflowError> {
+        self.installation_store
+            .upsert_manifest_and_installation(plan.manifest_record, plan.installation)
+            .await
+            .map_err(map_extension_installation_error)
+    }
+
+    async fn rollback_forced_replacement(
+        &self,
+        replacement: ForcedExtensionReplacement,
+        original_error: ProductWorkflowError,
+    ) -> Result<LifecycleProductResponse, ProductWorkflowError> {
+        if let Err(restore_error) = self
+            .restore_materialized_extension_files(&replacement.files)
+            .await
+        {
+            return Err(compensation_failure(
+                "extension force install failed and file restore failed",
+                original_error,
+                restore_error,
+            ));
+        }
+        if let Err(restore_error) = self
+            .restore_lifecycle_package(&replacement.lifecycle_package, replacement.previous_state)
+            .await
+        {
+            return Err(compensation_failure(
+                "extension force install failed and lifecycle restore failed",
+                original_error,
+                restore_error,
+            ));
+        }
+        if let Err(restore_error) = self
+            .restore_active_publication(&replacement.lifecycle_package, replacement.previous_state)
+        {
+            return Err(compensation_failure(
+                "extension force install failed and active publication restore failed",
+                original_error,
+                restore_error,
+            ));
+        }
+        if let Err(restore_error) = self
+            .restore_installation_records(replacement.manifest, replacement.installation)
+            .await
+        {
+            return Err(compensation_failure(
+                "extension force install failed and installation restore failed",
+                original_error,
+                restore_error,
+            ));
+        }
+        Err(original_error)
+    }
+
     async fn delete_materialized_extension_files(
         &self,
         extension_id: &ExtensionId,
@@ -2092,6 +2465,19 @@ struct HostedMcpDiscoveryRequest {
 struct ExtensionInstallPlan {
     manifest_record: ExtensionManifestRecord,
     installation: ExtensionInstallation,
+}
+
+struct ForcedExtensionReplacement {
+    manifest: ExtensionManifestRecord,
+    installation: ExtensionInstallation,
+    lifecycle_package: ExtensionPackage,
+    previous_state: ExtensionActivationState,
+    files: ExtensionFileBackup,
+}
+
+struct ExtensionFileBackup {
+    root: VirtualPath,
+    files: Vec<(VirtualPath, Vec<u8>)>,
 }
 
 fn prepare_install(
@@ -8711,6 +9097,110 @@ output_schema_ref = "schemas/run.output.json"
 
     /// The fixture's tenant-operator identity — matches the operator user id
     /// wired into every test `RebornLocalExtensionManagementPort`.
+    #[tokio::test]
+    async fn extension_force_install_materialization_failure_restores_existing_install() {
+        let initial = fixture_extension_package();
+        let old_hash = available_manifest_hash(&initial).expect("initial hash");
+        let (_dir, storage_root, port, active_registry, installation_store) =
+            extension_management_port_fixture_with_catalog_and_service(
+                AvailableExtensionCatalog::from_packages(vec![initial]),
+                ExtensionLifecycleService::new(ExtensionRegistry::new()),
+            );
+        let package_ref = LifecyclePackageRef::new(LifecyclePackageKind::Extension, "fixture")
+            .expect("valid ref");
+        port.install(package_ref.clone(), &lifecycle_owner())
+            .await
+            .expect("install extension");
+        port.activate(
+            package_ref,
+            ExtensionActivationMode::Static,
+            &lifecycle_owner(),
+        )
+        .await
+        .expect("activate extension");
+        let wasm_path = storage_root.join("system/extensions/fixture/wasm/fixture.wasm");
+        std::fs::write(&wasm_path, b"existing-live-module").expect("rewrite installed module");
+        let mut replacement =
+            fixture_extension_package_with_description("Replacement fixture extension");
+        replacement.assets[1].path = "../missing/fixture.wasm".to_string();
+
+        let error = port
+            .install_available_package(&replacement, true, &lifecycle_owner())
+            .await
+            .expect_err("failed force install restores previous extension");
+
+        assert!(matches!(
+            error,
+            ProductWorkflowError::InvalidBindingRequest { .. }
+        ));
+        let extension_id = ExtensionId::new("fixture").expect("valid extension id");
+        let installation_id = ExtensionInstallationId::new("fixture").expect("valid installation");
+        assert!(
+            active_registry
+                .snapshot()
+                .get_extension(&extension_id)
+                .is_some()
+        );
+        assert!(
+            std::fs::read_to_string(storage_root.join("system/extensions/fixture/manifest.toml"))
+                .expect("manifest restored")
+                .contains("Lifecycle fixture extension")
+        );
+        assert_eq!(
+            std::fs::read(wasm_path).expect("wasm restored"),
+            b"existing-live-module"
+        );
+        let installation = installation_store
+            .get_installation(&installation_id)
+            .await
+            .expect("read installation")
+            .expect("installation remains");
+        assert_eq!(
+            installation.activation_state(),
+            ExtensionActivationState::Enabled
+        );
+        let manifest = installation_store
+            .get_manifest(&extension_id)
+            .await
+            .expect("read manifest")
+            .expect("manifest remains");
+        assert_eq!(manifest.manifest_hash(), Some(&old_hash));
+    }
+
+    #[tokio::test]
+    async fn extension_force_install_removes_obsolete_materialized_files() {
+        let (_dir, storage_root, port, _active_registry, _installation_store) =
+            extension_management_port_fixture_with_catalog_and_service(
+                AvailableExtensionCatalog::from_packages(vec![fixture_extension_package()]),
+                ExtensionLifecycleService::new(ExtensionRegistry::new()),
+            );
+        let package_ref = LifecyclePackageRef::new(LifecyclePackageKind::Extension, "fixture")
+            .expect("valid ref");
+        port.install(package_ref, &lifecycle_owner())
+            .await
+            .expect("install extension");
+        let obsolete_path = storage_root.join("system/extensions/fixture/schemas/old.json");
+        std::fs::create_dir_all(obsolete_path.parent().expect("schema parent"))
+            .expect("create obsolete parent");
+        std::fs::write(&obsolete_path, br#"{"stale":true}"#).expect("write obsolete file");
+        let replacement =
+            fixture_extension_package_with_description("Replacement fixture extension");
+
+        port.install_available_package(&replacement, true, &lifecycle_owner())
+            .await
+            .expect("force install replacement");
+
+        assert!(
+            !obsolete_path.exists(),
+            "force install should clear obsolete old package files"
+        );
+        assert!(
+            std::fs::read_to_string(storage_root.join("system/extensions/fixture/manifest.toml"))
+                .expect("manifest materialized")
+                .contains("Replacement fixture extension")
+        );
+    }
+
     fn lifecycle_owner() -> UserId {
         UserId::new("lifecycle-owner").expect("valid user")
     }

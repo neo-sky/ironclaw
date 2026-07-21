@@ -73,6 +73,7 @@ mod extension_onboarding;
 mod extension_setup_credentials;
 mod extensions;
 mod fs_browse;
+mod ironhub_link;
 mod lifecycle_setup;
 mod llm_config;
 mod log_views;
@@ -110,6 +111,10 @@ use ironclaw_approvals::{
     PersistentApprovalPolicyInput, PersistentApprovalPolicyKey, PersistentApprovalPolicyStore,
     ToolPermissionOverride, ToolPermissionOverrideInput, ToolPermissionOverrideKey,
     ToolPermissionOverrideStore, ToolPermissionState, permission_mode_allows_persistent_approval,
+};
+pub use ironhub_link::{
+    IronhubInstallDeliveryRequest, IronhubInstallDeliveryResult, IronhubLinkError,
+    IronhubLinkService, IronhubRegisterRequest, ironhub_link_unavailable, map_ironhub_link_error,
 };
 pub use llm_config::{
     ActiveModelReader, CodexLoginStart, LlmActiveSelection, LlmConfigService,

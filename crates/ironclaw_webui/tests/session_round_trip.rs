@@ -402,6 +402,7 @@ fn build_app() -> (
 
     let services = Arc::new(StubServices::default());
     let bundle = RebornWebuiBundle {
+        ironhub_link: None,
         api: services.clone(),
         product_auth: None,
         readiness: RebornReadiness::disabled(),

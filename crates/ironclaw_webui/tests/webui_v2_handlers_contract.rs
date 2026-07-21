@@ -1,3 +1,4 @@
+// arch-exempt: large_file, caller-level contract tests per v2 route, plan #6320
 //! Caller-level contract tests for the WebChat v2 axum handlers.
 //!
 //! Per `.claude/rules/testing.md` "Test Through the Caller", these tests
@@ -28,11 +29,13 @@ use ironclaw_product_adapters::{
     ProgressKind, ProgressUpdateView, ProjectionCursor,
 };
 use ironclaw_product_workflow::{
-    FsMount, LOGS_VIEW, LifecyclePackageRef, LifecyclePhase, LlmActiveSelection, LlmConfigSnapshot,
-    LlmModelsResult, LlmProbeRequest, LlmProbeResult, LlmProviderView, OPERATOR_LOGS_VIEW,
-    ProjectFsEntry, ProjectFsEntryKind, ProjectFsFile, ProjectFsStat, RUN_ARTIFACT_SCHEMA,
-    RUN_ARTIFACT_VIEW, RebornAccountLoginLinkResponse, RebornAccountTracesResponse,
-    RebornAddMemberRequest, RebornAttachmentBytes, RebornAttachmentRequest, RebornAutomationInfo,
+    FsMount, IronhubInstallDeliveryRequest, IronhubInstallDeliveryResult, IronhubLinkError,
+    IronhubLinkService, IronhubRegisterRequest, LOGS_VIEW, LifecyclePackageRef, LifecyclePhase,
+    LlmActiveSelection, LlmConfigSnapshot, LlmModelsResult, LlmProbeRequest, LlmProbeResult,
+    LlmProviderView, OPERATOR_LOGS_VIEW, ProjectFsEntry, ProjectFsEntryKind, ProjectFsFile,
+    ProjectFsStat, RUN_ARTIFACT_SCHEMA, RUN_ARTIFACT_VIEW, RebornAccountLoginLinkResponse,
+    RebornAccountTracesResponse, RebornAddMemberRequest, RebornAttachmentBytes,
+    RebornAttachmentRequest, RebornAutomationInfo,
     RebornAutomationMutationResponse, RebornAutomationRecentRunInfo,
     RebornAutomationRecentRunStatus, RebornAutomationSource, RebornAutomationState,
     RebornCancelRunResponse, RebornChannelConnectAction, RebornChannelConnectStrategy,
@@ -98,6 +101,15 @@ fn caller_for_user(user_id: &str) -> WebUiAuthenticatedCaller {
 
 fn router_with(services: Arc<dyn RebornServicesApi>) -> Router {
     router_with_caller(services, WebUiV2Capabilities::default(), caller())
+}
+
+fn router_with_ironhub_link(services: Arc<StubServices>) -> Router {
+    webui_v2_router(
+        WebUiV2State::new(services.clone(), DEFAULT_SSE_MAX_CONCURRENT_PER_CALLER)
+            .with_ironhub_link(Some(services)),
+    )
+    .layer(axum::Extension(caller()))
+    .layer(axum::Extension(WebUiV2Capabilities::default()))
 }
 
 fn router_with_caller(
@@ -301,6 +313,8 @@ struct StubServices {
     /// Raw zip bytes each `import_extension` call forwards, so the route test
     /// can assert the uploaded body reaches the facade intact.
     import_extension_calls: Mutex<Vec<Vec<u8>>>,
+    ironhub_deliver_install_calls: Mutex<Vec<IronhubInstallDeliveryRequest>>,
+    next_ironhub_deliver_install_error: Mutex<Option<IronhubLinkError>>,
     activate_extension_calls: Mutex<Vec<String>>,
     remove_extension_calls: Mutex<Vec<String>>,
     get_llm_config_calls: Mutex<usize>,
@@ -379,6 +393,13 @@ impl StubServices {
             .expect("lock") = Some(error);
     }
 
+    fn fail_ironhub_deliver_install(&self, error: IronhubLinkError) {
+        *self
+            .next_ironhub_deliver_install_error
+            .lock()
+            .expect("lock") = Some(error);
+    }
+
     fn enqueue_retry_run(&self, response: Result<RebornRetryRunResponse, RebornServicesError>) {
         self.next_retry_run
             .lock()
@@ -427,6 +448,38 @@ impl StubServices {
 
     fn set_next_submit_response(&self, response: RebornSubmitTurnResponse) {
         *self.next_submit_response.lock().expect("lock") = Some(response);
+    }
+}
+
+#[async_trait]
+impl IronhubLinkService for StubServices {
+    async fn register(&self, _request: IronhubRegisterRequest) -> Result<(), IronhubLinkError> {
+        Ok(())
+    }
+
+    async fn deliver_install(
+        &self,
+        _user_id: UserId,
+        request: IronhubInstallDeliveryRequest,
+    ) -> Result<IronhubInstallDeliveryResult, IronhubLinkError> {
+        let slug = request.slug.clone();
+        self.ironhub_deliver_install_calls
+            .lock()
+            .expect("lock")
+            .push(request);
+        if let Some(error) = self
+            .next_ironhub_deliver_install_error
+            .lock()
+            .expect("lock")
+            .take()
+        {
+            return Err(error);
+        }
+        Ok(IronhubInstallDeliveryResult {
+            installed: true,
+            slug,
+            message: "installed".to_string(),
+        })
     }
 }
 
@@ -6755,4 +6808,103 @@ async fn list_projects_unwired_returns_503() {
         .await
         .expect("response");
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn ironhub_deliver_install_dispatches_through_facade() {
+    let services = Arc::new(StubServices::default());
+    let router = router_with_ironhub_link(services.clone());
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/webchat/v2/ironhub/install")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"slug":"my-skill","version":"1.0.0","uid":"u","aid":"a","ts":1700000000,"nonce":"n","artifact_digest":"sha256:deadbeef","sig":"sig-1","private_manifest_url":"https://hub.example/manifest/tok"}"#,
+                ))
+                .expect("request"),
+        )
+        .await
+        .expect("oneshot");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = read_json(response).await;
+    assert_eq!(body["slug"], "my-skill");
+    let calls = services.ironhub_deliver_install_calls.lock().expect("lock");
+    assert_eq!(calls.len(), 1, "facade called exactly once");
+    assert_eq!(calls[0].slug, "my-skill");
+    assert_eq!(calls[0].version, "1.0.0");
+    assert_eq!(calls[0].uid, "u");
+    assert_eq!(calls[0].aid, "a");
+    assert_eq!(calls[0].ts, 1_700_000_000);
+    assert_eq!(calls[0].nonce, "n");
+    assert_eq!(calls[0].artifact_digest, "sha256:deadbeef");
+    assert_eq!(calls[0].sig, "sig-1");
+    assert_eq!(
+        calls[0].private_manifest_url.as_deref(),
+        Some("https://hub.example/manifest/tok")
+    );
+}
+
+#[tokio::test]
+async fn ironhub_deliver_install_rejects_malformed_body_without_dispatch() {
+    let services = Arc::new(StubServices::default());
+    let router = router_with_ironhub_link(services.clone());
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/webchat/v2/ironhub/install")
+                .header("content-type", "application/json")
+                .body(Body::from("{not json"))
+                .expect("request"),
+        )
+        .await
+        .expect("oneshot");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        services
+            .ironhub_deliver_install_calls
+            .lock()
+            .expect("lock")
+            .len(),
+        0,
+        "facade must not be called for a malformed body"
+    );
+}
+
+#[tokio::test]
+async fn ironhub_deliver_install_error_maps_to_http_status() {
+    let services = Arc::new(StubServices::default());
+    services.fail_ironhub_deliver_install(IronhubLinkError::InvalidSignature);
+    let router = router_with_ironhub_link(services.clone());
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/webchat/v2/ironhub/install")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"slug":"my-skill","version":"1.0.0","uid":"u","aid":"a","ts":1700000000,"nonce":"n","artifact_digest":"sha256:deadbeef","sig":"sig-1"}"#,
+                ))
+                .expect("request"),
+        )
+        .await
+        .expect("oneshot");
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        services
+            .ironhub_deliver_install_calls
+            .lock()
+            .expect("lock")
+            .len(),
+        1,
+        "handler dispatched to the facade before the error mapped"
+    );
 }

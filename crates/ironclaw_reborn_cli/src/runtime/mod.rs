@@ -586,6 +586,16 @@ pub(crate) fn build_runtime_input_with_options(
         }
     }
 
+    if let Ok(shared_key) = std::env::var("IRONHUB_AGENT_SHARED_KEY") {
+        let shared_key = shared_key.trim();
+        if !shared_key.is_empty() {
+            runtime_input = runtime_input.with_ironhub_agent_shared_key(
+                ironclaw_reborn_composition::IronhubSharedKey::new(shared_key)
+                    .context("IRONHUB_AGENT_SHARED_KEY is invalid")?,
+            );
+        }
+    }
+
     Ok(BuiltRuntimeInput {
         inner: runtime_input,
         slack_personal_lazy_slot,

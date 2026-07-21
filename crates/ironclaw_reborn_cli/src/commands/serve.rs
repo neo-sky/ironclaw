@@ -16,6 +16,7 @@ use ironclaw_reborn_composition::{
     GoogleOAuthRouteConfig, RebornBuildInput, RebornReadiness, RebornRuntimeIdentity,
     RebornRuntimeInput, RebornWebuiBundle, TriggerFireAccessPolicy, build_reborn_runtime,
 };
+use ironclaw_reborn_composition::{IronhubRegisterRouteState, ironhub_register_route_mount};
 use ironclaw_reborn_composition::{
     SlackOperatorRouteVisibility, build_slack_host_beta_runtime_mounts,
     build_webui_services_with_slack_host_beta_mounts,
@@ -704,6 +705,13 @@ impl ServeCommand {
             // from the runtime's LLM seam; absent when no LLM was wired.
             if let Some(nearai_mount) = runtime.nearai_login_callback_mount() {
                 serve_config = serve_config.with_public_route_mount(nearai_mount);
+            }
+            if runtime.ironhub_register_enabled()
+                && let Some(link) = bundle.ironhub_link.clone()
+            {
+                let register_state = IronhubRegisterRouteState::new(link);
+                serve_config = serve_config
+                    .with_public_route_mount(ironhub_register_route_mount(register_state));
             }
             if let Some(mount) = public_mount {
                 serve_config = serve_config.with_public_route_mount(mount);

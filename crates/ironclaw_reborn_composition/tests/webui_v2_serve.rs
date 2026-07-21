@@ -19,10 +19,12 @@ use axum::http::{HeaderValue, Method, Request, StatusCode, header};
 use http_body_util::BodyExt;
 use ironclaw_host_api::{AgentId, NetworkMethod, ProjectId, TenantId, ThreadId, UserId};
 use ironclaw_product_workflow::{
-    LifecyclePackageRef, LifecyclePhase, RebornCancelRunResponse, RebornCreateThreadResponse,
-    RebornDeleteThreadRequest, RebornDeleteThreadResponse, RebornExtensionActionResponse,
-    RebornExtensionListResponse, RebornExtensionRegistryResponse, RebornGetRunStateRequest,
-    RebornGetRunStateResponse, RebornListAutomationsResponse, RebornListThreadsResponse,
+    IronhubInstallDeliveryRequest, IronhubInstallDeliveryResult, IronhubLinkError,
+    IronhubLinkService, IronhubRegisterRequest, LifecyclePackageRef, LifecyclePhase,
+    RebornCancelRunResponse, RebornCreateThreadResponse, RebornDeleteThreadRequest,
+    RebornDeleteThreadResponse, RebornExtensionActionResponse, RebornExtensionListResponse,
+    RebornExtensionRegistryResponse, RebornGetRunStateRequest, RebornGetRunStateResponse,
+    RebornListAutomationsResponse, RebornListThreadsResponse,
     RebornOutboundDeliveryTargetListResponse, RebornOutboundPreferencesResponse,
     RebornResolveGateResponse, RebornRetryRunResponse, RebornServicesApi, RebornServicesError,
     RebornServicesErrorCode, RebornServicesErrorKind, RebornSetOutboundPreferencesRequest,
@@ -34,7 +36,10 @@ use ironclaw_product_workflow::{
     WebUiResolveGateRequest, WebUiRetryRunRequest, WebUiSendMessageRequest,
     WebUiSetupExtensionRequest,
 };
-use ironclaw_reborn_composition::{PublicRouteMount, RebornReadiness, RebornWebuiBundle};
+use ironclaw_reborn_composition::{
+    IronhubRegisterRouteState, PublicRouteMount, RebornReadiness, RebornWebuiBundle,
+    ironhub_register_route_mount,
+};
 use ironclaw_threads::{SessionThreadRecord, ThreadScope};
 use ironclaw_turns::{EventCursor, RunProfileId, RunProfileVersion, TurnRunId, TurnStatus};
 use ironclaw_webui::{
@@ -92,6 +97,7 @@ fn compose_with_public_descriptor(
     route_pattern: &str,
 ) -> Result<axum::Router, WebuiServeError> {
     let bundle = RebornWebuiBundle {
+        ironhub_link: None,
         api: Arc::new(StubServices::default()),
         product_auth: None,
         readiness: RebornReadiness::disabled(),
@@ -181,6 +187,7 @@ impl WebuiAuthenticator for FixedUserToken {
 #[tokio::test]
 async fn health_route_is_public_for_platform_probes() {
     let bundle = RebornWebuiBundle {
+        ironhub_link: None,
         api: Arc::new(StubServices::default()),
         product_auth: None,
         readiness: RebornReadiness::disabled(),
@@ -263,6 +270,7 @@ mod openai_compat_mount_tests {
             openai_compat_routes(),
         );
         let bundle = RebornWebuiBundle {
+            ironhub_link: None,
             api: Arc::new(StubServices::default()),
             product_auth: None,
             readiness: RebornReadiness::disabled(),
@@ -333,6 +341,7 @@ mod openai_compat_mount_tests {
             openai_compat_routes(),
         );
         let bundle = RebornWebuiBundle {
+            ironhub_link: None,
             api: Arc::new(StubServices::default()),
             product_auth: None,
             readiness: RebornReadiness::disabled(),
@@ -444,6 +453,7 @@ mod openai_compat_mount_tests {
             openai_compat_routes(),
         );
         let bundle = RebornWebuiBundle {
+            ironhub_link: None,
             api: Arc::new(StubServices::default()),
             product_auth: None,
             readiness: RebornReadiness::disabled(),
@@ -752,6 +762,30 @@ struct StubServices {
     // calling the facade, so this captures whatever the path
     // extractor delivered.
     resolve_gate_refs: Mutex<Vec<Option<String>>>,
+    ironhub_register_calls: Mutex<Vec<IronhubRegisterRequest>>,
+}
+
+#[async_trait]
+impl IronhubLinkService for StubServices {
+    async fn register(&self, request: IronhubRegisterRequest) -> Result<(), IronhubLinkError> {
+        self.ironhub_register_calls
+            .lock()
+            .expect("lock")
+            .push(request);
+        Ok(())
+    }
+
+    async fn deliver_install(
+        &self,
+        _user_id: UserId,
+        _request: IronhubInstallDeliveryRequest,
+    ) -> Result<IronhubInstallDeliveryResult, IronhubLinkError> {
+        Ok(IronhubInstallDeliveryResult {
+            installed: true,
+            slug: String::new(),
+            message: String::new(),
+        })
+    }
 }
 
 #[async_trait]
@@ -1082,6 +1116,7 @@ const PROJECT: &str = "project-default";
 fn build_app() -> (axum::Router, Arc<StubServices>) {
     let services = Arc::new(StubServices::default());
     let bundle = RebornWebuiBundle {
+        ironhub_link: None,
         api: services.clone(),
         product_auth: None,
         readiness: RebornReadiness::disabled(),
@@ -1106,6 +1141,7 @@ fn build_app_with_authenticator(
 ) -> (axum::Router, Arc<StubServices>) {
     let services = Arc::new(StubServices::default());
     let bundle = RebornWebuiBundle {
+        ironhub_link: None,
         api: services.clone(),
         product_auth: None,
         readiness: RebornReadiness::disabled(),
@@ -1620,6 +1656,7 @@ async fn malformed_user_id_from_authenticator_rejects_with_401() {
 
     let services = Arc::new(StubServices::default());
     let bundle = RebornWebuiBundle {
+        ironhub_link: None,
         api: services.clone(),
         product_auth: None,
         readiness: RebornReadiness::disabled(),
@@ -1895,6 +1932,7 @@ async fn ws_upgrade_uses_canonical_host_over_client_host_when_configured() {
 
     let services = Arc::new(StubServices::default());
     let bundle = RebornWebuiBundle {
+        ironhub_link: None,
         api: services.clone(),
         product_auth: None,
         readiness: RebornReadiness::disabled(),
@@ -2093,6 +2131,7 @@ async fn rate_limit_is_independent_per_caller() {
 
     let services = Arc::new(StubServices::default());
     let bundle = RebornWebuiBundle {
+        ironhub_link: None,
         api: services.clone(),
         product_auth: None,
         readiness: RebornReadiness::disabled(),
@@ -2964,6 +3003,7 @@ async fn public_route_mount_is_merged_without_bearer_auth_and_keeps_descriptor_p
 
     let services = Arc::new(StubServices::default());
     let bundle = RebornWebuiBundle {
+        ironhub_link: None,
         api: services,
         product_auth: None,
         readiness: RebornReadiness::disabled(),
@@ -3035,6 +3075,7 @@ async fn public_route_mount_reserves_its_root_namespace_from_spa_fallback() {
 
     let services = Arc::new(StubServices::default());
     let bundle = RebornWebuiBundle {
+        ironhub_link: None,
         api: services,
         product_auth: None,
         readiness: RebornReadiness::disabled(),
@@ -3366,4 +3407,62 @@ async fn telegram_public_mount_enforces_descriptor_body_limit_and_404s_path_prob
     );
 
     runtime.shutdown().await.expect("runtime shuts down");
+}
+
+#[tokio::test]
+async fn ironhub_register_route_rejects_malformed_body_with_400() {
+    let services = Arc::new(StubServices::default());
+    let mount = ironhub_register_route_mount(IronhubRegisterRouteState::new(services.clone()));
+
+    let response = mount
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/ironhub/register")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from("{not json"))
+                .expect("request"),
+        )
+        .await
+        .expect("oneshot");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        services.ironhub_register_calls.lock().expect("lock").len(),
+        0,
+        "facade must not be called for a malformed body"
+    );
+}
+
+#[tokio::test]
+async fn ironhub_register_route_dispatches_valid_body_to_facade() {
+    let services = Arc::new(StubServices::default());
+    let mount = ironhub_register_route_mount(IronhubRegisterRouteState::new(services.clone()));
+
+    let response = mount
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/ironhub/register")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"uid":"u","aid":"a","ts":1700000000,"nonce":"n","sig":"sig-1"}"#,
+                ))
+                .expect("request"),
+        )
+        .await
+        .expect("oneshot");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let calls = services.ironhub_register_calls.lock().expect("lock");
+    assert_eq!(calls.len(), 1, "facade called exactly once");
+    assert_eq!(calls[0].uid, "u");
+    assert_eq!(calls[0].aid, "a");
+    assert_eq!(calls[0].ts, 1_700_000_000);
+    assert_eq!(calls[0].nonce, "n");
+    assert_eq!(calls[0].sig, "sig-1");
 }

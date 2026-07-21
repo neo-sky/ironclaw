@@ -487,6 +487,12 @@ pub struct RebornRuntimeInput {
     /// Operator boot config. When present, the WebUI facade composes the LLM-config settings service from it so the
     /// settings surface can read/write `providers.json` + `config.toml`.
     pub boot: Option<RebornBootConfig>,
+    /// Shared HMAC key the IronHub deep-link register/install webhooks verify
+    /// inbound hub signatures against. The key is one of the link-service
+    /// inputs: the webhooks mount only when the local runtime lifecycle ports
+    /// and host HTTP egress are also composed (see
+    /// `RebornRuntime::ironhub_register_enabled`).
+    pub ironhub_agent_shared_key: Option<crate::ironhub::IronhubSharedKey>,
     pub runner: TurnRunnerSettings,
     pub tool_disclosure: Option<ToolDisclosureMode>,
     pub trigger_poller: TriggerPollerSettings,
@@ -563,6 +569,7 @@ impl RebornRuntimeInput {
             services: Some(services),
             llm: None,
             boot: None,
+            ironhub_agent_shared_key: None,
             runner: TurnRunnerSettings::default(),
             tool_disclosure: None,
             trigger_poller: TriggerPollerSettings::default(),
@@ -680,6 +687,17 @@ impl RebornRuntimeInput {
     /// LLM-config settings service.
     pub fn with_boot_config(mut self, boot: RebornBootConfig) -> Self {
         self.boot = Some(boot);
+        self
+    }
+
+    /// Supply the IronHub agent-link shared HMAC key. The deep-link
+    /// register/install webhooks mount once the runtime also composes the
+    /// local lifecycle ports and host HTTP egress.
+    pub fn with_ironhub_agent_shared_key(
+        mut self,
+        shared_key: crate::ironhub::IronhubSharedKey,
+    ) -> Self {
+        self.ironhub_agent_shared_key = Some(shared_key);
         self
     }
 

@@ -72,6 +72,7 @@ const ENV_USER: &str = "operator-user";
 fn compose(authenticator: Arc<dyn WebuiAuthenticator>) -> (axum::Router, Arc<StubServices>) {
     let services = Arc::new(StubServices::default());
     let bundle = RebornWebuiBundle {
+        ironhub_link: None,
         api: services.clone(),
         product_auth: None,
         readiness: RebornReadiness::disabled(),
@@ -384,6 +385,7 @@ async fn session_minted_for_one_tenant_does_not_authenticate_another_deployment(
     let authenticator = Arc::new(SessionAuthenticator::new(tenant_b_store.clone()));
     let services = Arc::new(StubServices::default());
     let bundle = RebornWebuiBundle {
+        ironhub_link: None,
         api: services.clone(),
         product_auth: None,
         readiness: RebornReadiness::disabled(),

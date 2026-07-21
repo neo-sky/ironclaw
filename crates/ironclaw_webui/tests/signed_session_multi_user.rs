@@ -369,6 +369,7 @@ fn build_app(profiles: Vec<OAuthUserProfile>) -> (axum::Router, Arc<RecordingSer
 
     let services = Arc::new(RecordingServices::default());
     let bundle = RebornWebuiBundle {
+        ironhub_link: None,
         api: services.clone(),
         product_auth: None,
         readiness: RebornReadiness::disabled(),

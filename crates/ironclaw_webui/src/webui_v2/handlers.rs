@@ -1,3 +1,4 @@
+// arch-exempt: large_file, one handler per v2 route, plan #6320
 //! WebChat v2 HTTP handlers.
 //!
 //! Every handler:
@@ -27,7 +28,8 @@ use axum::response::{IntoResponse, Response};
 use futures::SinkExt;
 use futures::stream::Stream;
 use ironclaw_product_workflow::{
-    CodexLoginStart, FsMount, LOGS_VIEW, LifecyclePackageKind, LifecyclePackageRef,
+    CodexLoginStart, FsMount, IronhubInstallDeliveryRequest, IronhubInstallDeliveryResult,
+    LOGS_VIEW, LifecyclePackageKind, LifecyclePackageRef,
     LlmConfigSnapshot, LlmModelsResult, LlmProbeRequest, LlmProbeResult, NearAiLoginRequest,
     NearAiLoginStart, NearAiWalletLoginRequest, NearAiWalletLoginResult, OPERATOR_LOGS_VIEW,
     ProductOutboundEnvelope, ProductWorkflowError, ProjectFsFile, ProjectionCursor,
@@ -64,7 +66,8 @@ use ironclaw_product_workflow::{
     WebUiCancelRunRequest, WebUiCreateThreadRequest, WebUiInboundValidationCode,
     WebUiInboundValidationError, WebUiListAutomationsRequest, WebUiListThreadsRequest,
     WebUiRenameAutomationRequest, WebUiResolveGateRequest, WebUiRetryRunRequest,
-    WebUiSendMessageRequest, WebUiSetupExtensionRequest, webui_attachment_capabilities,
+    WebUiSendMessageRequest, WebUiSetupExtensionRequest, ironhub_link_unavailable,
+    map_ironhub_link_error, webui_attachment_capabilities,
 };
 use serde::{Deserialize, Serialize};
 
@@ -1627,6 +1630,20 @@ pub async fn import_extension(
         .services()
         .import_extension(caller, body.to_vec())
         .await?;
+    Ok(Json(response))
+}
+
+/// `POST /api/webchat/v2/ironhub/install`
+pub async fn ironhub_deliver_install(
+    State(state): State<WebUiV2State>,
+    Extension(caller): Extension<WebUiAuthenticatedCaller>,
+    Json(body): Json<IronhubInstallDeliveryRequest>,
+) -> Result<Json<IronhubInstallDeliveryResult>, WebUiV2HttpError> {
+    let link = state.ironhub_link().ok_or_else(ironhub_link_unavailable)?;
+    let response = link
+        .deliver_install(caller.user_id, body)
+        .await
+        .map_err(map_ironhub_link_error)?;
     Ok(Json(response))
 }
 

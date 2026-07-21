@@ -1,3 +1,4 @@
+// arch-exempt: large_file, product-auth route contract suite, plan #6320
 //! Caller-level tests for issue #4201: product-facing HTTP surfaces for
 //! manual-token setup/secret-submit, credential account list/select/recovery,
 //! refresh, and lifecycle cleanup.
@@ -295,6 +296,7 @@ fn build_fixture() -> AppFixture {
         Arc::new(NoopAuthDispatcher::default()),
     ));
     let bundle = RebornWebuiBundle {
+        ironhub_link: None,
         api: Arc::new(UnusedServices),
         product_auth: Some(product_auth),
         readiness: RebornReadiness::disabled(),

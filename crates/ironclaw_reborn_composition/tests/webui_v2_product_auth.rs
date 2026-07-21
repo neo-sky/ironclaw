@@ -533,6 +533,7 @@ fn build_app_with_product_auth_service_config_and_extensions(
     installed_package_ids: &[&str],
 ) -> axum::Router {
     let bundle = RebornWebuiBundle {
+        ironhub_link: None,
         api: Arc::new(UnusedServices::with_installed_extensions(
             installed_package_ids,
         )),
@@ -2265,6 +2266,7 @@ mod slack_personal_oauth_serve {
             dispatcher,
         ));
         let bundle = RebornWebuiBundle {
+            ironhub_link: None,
             api: Arc::new(UnusedServices::with_installed_extensions(&["slack"])),
             product_auth: Some(product_auth),
             readiness: RebornReadiness::disabled(),

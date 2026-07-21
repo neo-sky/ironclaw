@@ -11,14 +11,14 @@ use ironclaw_host_api::{
 };
 use ironclaw_product_adapters::ProjectionStream;
 use ironclaw_product_workflow::{
-    ChannelConnectionFacade, ConnectableChannelsProductFacade, OperatorStatusService,
-    RebornOperatorStatusCheck, RebornOperatorStatusResponse, RebornOperatorStatusSeverity,
-    RebornOperatorStatusState, RebornOperatorToolCatalog, RebornOperatorToolInfo,
-    RebornServices as ProductRebornServices, RebornServicesApi, RebornServicesError,
-    RebornServicesErrorCode, RebornServicesErrorKind, RebornSkillActionResponse,
-    RebornSkillContentResponse, RebornSkillInfo, RebornSkillListResponse,
-    RebornSkillSearchResponse, RebornSkillSourceKind, RebornSkillTrustLevel, SkillsProductFacade,
-    WebUiAuthenticatedCaller,
+    ChannelConnectionFacade, ConnectableChannelsProductFacade, IronhubLinkService,
+    OperatorStatusService, RebornOperatorStatusCheck, RebornOperatorStatusResponse,
+    RebornOperatorStatusSeverity, RebornOperatorStatusState, RebornOperatorToolCatalog,
+    RebornOperatorToolInfo, RebornServices as ProductRebornServices, RebornServicesApi,
+    RebornServicesError, RebornServicesErrorCode, RebornServicesErrorKind,
+    RebornSkillActionResponse, RebornSkillContentResponse, RebornSkillInfo,
+    RebornSkillListResponse, RebornSkillSearchResponse, RebornSkillSourceKind,
+    RebornSkillTrustLevel, SkillsProductFacade, WebUiAuthenticatedCaller,
 };
 
 use ironclaw_triggers::TriggerRepository;
@@ -154,6 +154,7 @@ impl RebornOperatorToolCatalog for ActiveRegistryOperatorToolCatalog {
 pub struct RebornWebuiBundle {
     pub api: Arc<dyn RebornServicesApi>,
     pub product_auth: Option<Arc<RebornProductAuthServices>>,
+    pub ironhub_link: Option<Arc<dyn IronhubLinkService>>,
     pub readiness: RebornReadiness,
 }
 
@@ -455,6 +456,9 @@ pub(crate) fn build_webui_services_with_connectable_channels(
     Ok(RebornWebuiBundle {
         api: Arc::new(api),
         product_auth: services.product_auth.clone(),
+        ironhub_link: runtime
+            .webui_ironhub_link_service()?
+            .map(|service| service as Arc<dyn IronhubLinkService>),
         readiness: services.readiness.clone(),
     })
 }

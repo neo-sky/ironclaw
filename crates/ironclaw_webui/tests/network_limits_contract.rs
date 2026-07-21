@@ -121,6 +121,7 @@ fn build_app(allowed_origins: Vec<HeaderValue>) -> axum::Router {
     ));
 
     let bundle = RebornWebuiBundle {
+        ironhub_link: None,
         api: Arc::new(StubServices::default()),
         product_auth: None,
         readiness: RebornReadiness::disabled(),

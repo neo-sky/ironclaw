@@ -1,4 +1,6 @@
 // arch-exempt: large_file, bundled extension catalog and manifest projection, plan #5905
+use std::collections::BTreeMap;
+
 use ironclaw_auth::SLACK_PERSONAL_PROVIDER_ID;
 use ironclaw_extensions::{
     CapabilityDeclV2, CapabilityVisibility, ExtensionManifestRecord, ExtensionPackage,
@@ -196,7 +198,11 @@ impl AvailableExtensionPackage {
             name: self.package.manifest.name.clone(),
             version: self.package.manifest.version.clone(),
             description: self.package.manifest.description.clone(),
-            source: LifecycleExtensionSource::HostBundled,
+            source: match self.package.manifest.source {
+                ManifestSource::HostBundled => LifecycleExtensionSource::HostBundled,
+                ManifestSource::InstalledLocal => LifecycleExtensionSource::Installed,
+                ManifestSource::RegistryInstalled => LifecycleExtensionSource::Registry,
+            },
             runtime_kind: runtime_kind(&self.package.manifest.runtime),
             surface_kinds: self.surface_kinds.clone(),
             visible_capability_ids,
@@ -434,6 +440,7 @@ impl AvailableExtensionCatalog {
         }
     }
 
+    #[cfg(test)]
     pub(crate) async fn from_filesystem_root<F>(
         fs: &F,
         root: &VirtualPath,
@@ -441,8 +448,20 @@ impl AvailableExtensionCatalog {
     where
         F: RootFilesystem + ?Sized,
     {
+        let manifest_sources = BTreeMap::new();
+        Self::from_filesystem_root_with_manifest_sources(fs, root, &manifest_sources).await
+    }
+
+    pub(crate) async fn from_filesystem_root_with_manifest_sources<F>(
+        fs: &F,
+        root: &VirtualPath,
+        manifest_sources: &BTreeMap<String, ManifestSource>,
+    ) -> Result<Self, ProductWorkflowError>
+    where
+        F: RootFilesystem + ?Sized,
+    {
         Ok(Self::from_packages(
-            load_filesystem_packages(fs, root).await?,
+            load_filesystem_packages(fs, root, manifest_sources).await?,
         ))
     }
 
@@ -1620,6 +1639,7 @@ pub(crate) fn bytes_asset(path: &str, bytes: &[u8]) -> AvailableExtensionAsset {
 async fn load_filesystem_packages<F>(
     fs: &F,
     root: &VirtualPath,
+    manifest_sources: &BTreeMap<String, ManifestSource>,
 ) -> Result<Vec<AvailableExtensionPackage>, ProductWorkflowError>
 where
     F: RootFilesystem + ?Sized,
@@ -1659,7 +1679,11 @@ where
         if reserved_host_bundled_extension_id(&extension_id) {
             continue;
         }
-        match load_filesystem_package(fs, entry, &host_ports, &contracts).await {
+        let manifest_source = manifest_sources
+            .get(&entry.name)
+            .copied()
+            .unwrap_or(ManifestSource::InstalledLocal);
+        match load_filesystem_package(fs, entry, &host_ports, &contracts, manifest_source).await {
             Ok(Some(package)) => packages.push(package),
             Ok(None) => {}
             // Per-entry validation failure is fail-open: a stale materialized
@@ -1687,6 +1711,7 @@ async fn load_filesystem_package<F>(
     entry: DirEntry,
     host_ports: &HostPortCatalog,
     contracts: &HostApiContractRegistry,
+    manifest_source: ManifestSource,
 ) -> Result<Option<AvailableExtensionPackage>, ProductWorkflowError>
 where
     F: RootFilesystem + ?Sized,
@@ -1714,7 +1739,7 @@ where
     })?;
     let record = ExtensionManifestRecord::from_toml_with_contracts(
         manifest_toml,
-        ManifestSource::InstalledLocal,
+        manifest_source,
         host_ports,
         None,
         contracts,
@@ -1742,16 +1767,11 @@ where
             package.id.as_str(),
         )?,
         manifest_toml: record.raw_toml().to_string(),
-        // Everything discovered on the filesystem is `InstalledLocal`, per
-        // the `ManifestSource` contract ("Locally installed extension under
-        // `/system/extensions/`"). `HostBundled` — the only tier eligible
-        // for first-party/system trust — is reserved for extensions
-        // compiled into the host binary (`from_first_party_assets`), whose
-        // reserved ids the scan skips above. Uploaded tool bundles
-        // materialize under this root, so stamping discovery `HostBundled`
-        // would let a process restart launder an untrusted upload into
-        // first-party trust (#5459 review: import → restart → install).
-        source: ManifestSource::InstalledLocal,
+        // The source comes from durable installation records written by the
+        // trusted install path, never from the on-disk manifest, so a
+        // restart cannot launder an upload into first-party trust (#5459);
+        // `HostBundled` ids are skipped by the scan above.
+        source: manifest_source,
         package,
         cleanup_requirements: Vec::new(),
         surface_kinds,
@@ -1800,7 +1820,7 @@ fn visible_capabilities(
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::{BTreeSet, HashMap, HashSet},
+        collections::{BTreeMap, BTreeSet, HashMap, HashSet},
         sync::{Arc, Mutex},
         time::SystemTime,
     };
@@ -3043,6 +3063,71 @@ credential_handle = "channel_ext_token"
         assert!(
             package.cleanup_requirements.is_empty(),
             "ExternalChannel presentation metadata must not infer host-owned cleanup"
+        );
+    }
+
+    #[tokio::test]
+    async fn filesystem_catalog_preserves_persisted_manifest_source() {
+        static REGISTRY_MANIFEST: &str = r#"
+schema_version = "reborn.extension_manifest.v2"
+id = "fixture"
+name = "Fixture"
+version = "0.1.0"
+description = "fixture extension"
+trust = "third_party"
+
+[runtime]
+kind = "wasm"
+module = "wasm/fixture.wasm"
+
+[[host_api]]
+id = "ironclaw.capability_provider/v1"
+section = "capability_provider.tools"
+
+[capability_provider.tools]
+
+[[capability_provider.tools.capabilities]]
+id = "fixture.search"
+description = "Search"
+effects = ["network"]
+default_permission = "ask"
+visibility = "model"
+input_schema_ref = "schemas/search.input.json"
+output_schema_ref = "schemas/search.output.json"
+"#;
+        let fs = InMemoryBackend::default();
+        fs.write_file(
+            &VirtualPath::new("/system/extensions/fixture/manifest.toml").unwrap(),
+            REGISTRY_MANIFEST.as_bytes(),
+        )
+        .await
+        .unwrap();
+        fs.write_file(
+            &VirtualPath::new("/system/extensions/fixture/wasm/fixture.wasm").unwrap(),
+            b"wasm",
+        )
+        .await
+        .unwrap();
+        let mut manifest_sources = BTreeMap::new();
+        manifest_sources.insert("fixture".to_string(), ManifestSource::RegistryInstalled);
+
+        let catalog = AvailableExtensionCatalog::from_filesystem_root_with_manifest_sources(
+            &fs,
+            &VirtualPath::new("/system/extensions").unwrap(),
+            &manifest_sources,
+        )
+        .await
+        .unwrap();
+        let results = catalog.search("fixture").collect::<Vec<_>>();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].package.manifest.source,
+            ManifestSource::RegistryInstalled
+        );
+        assert_eq!(
+            results[0].summary().source,
+            ironclaw_product_workflow::LifecycleExtensionSource::Registry
         );
     }
 

@@ -34,6 +34,8 @@ mod extension_host;
 mod factory;
 mod google_oauth_secret_store;
 mod input;
+mod ironhub;
+mod ironhub_link_serve;
 mod lifecycle_auth_continuation;
 mod llm_admin;
 mod local_dev_authorization;
@@ -118,6 +120,11 @@ pub use ironclaw_skills::{
 };
 pub use ironclaw_triggers::TriggerId;
 pub use ironclaw_turns::TurnStatus;
+pub use ironhub::{
+    IronHubCommand, IronHubCommandError, IronHubEntryKind, IronHubInstallOptions, IronhubSharedKey,
+    IronhubSharedKeyError, execute_reborn_ironhub_command, render_reborn_ironhub_response,
+};
+pub use ironhub_link_serve::{IronhubRegisterRouteState, ironhub_register_route_mount};
 pub use llm_admin::llm_catalog::{
     ProviderCatalogValidationError, RebornLlmCatalogError, resolve_against_registry,
     resolve_llm_selection_against_catalog, resolve_llm_selection_allow_missing_key,
