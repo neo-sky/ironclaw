@@ -9,7 +9,7 @@ use ironclaw_host_api::runtime_policy::{
     EffectiveRuntimePolicy, FilesystemBackendKind, NetworkMode, SecretMode,
 };
 use ironclaw_host_api::{AgentId, TenantId};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use ironclaw_host_runtime::HostRuntimeHttpEgressPort;
 use ironclaw_host_runtime::TenantSandboxProcessPort;
 #[cfg(any(test, feature = "test-support"))]
@@ -182,7 +182,7 @@ pub struct RebornBuildInput {
     pub(crate) required_runtime_backends: Vec<ironclaw_host_api::RuntimeKind>,
     pub(crate) require_runtime_http_egress: bool,
     pub(crate) require_wasm_credentials: bool,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) host_runtime_http_egress_for_test: Option<Option<HostRuntimeHttpEgressPort>>,
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) network_http_egress_for_test: Option<Arc<dyn NetworkHttpEgress>>,
@@ -681,8 +681,8 @@ impl RebornBuildInput {
         self
     }
 
-    #[cfg(test)]
-    pub(crate) fn with_host_runtime_http_egress_for_test(
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn with_host_runtime_http_egress_for_test(
         mut self,
         egress: Option<HostRuntimeHttpEgressPort>,
     ) -> Self {
@@ -837,7 +837,7 @@ impl RebornBuildInput {
             required_runtime_backends: Vec::new(),
             require_runtime_http_egress: false,
             require_wasm_credentials: false,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             host_runtime_http_egress_for_test: None,
             #[cfg(any(test, feature = "test-support"))]
             network_http_egress_for_test: None,

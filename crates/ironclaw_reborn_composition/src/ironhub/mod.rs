@@ -1,5 +1,6 @@
 mod agent_link;
 mod capabilities;
+mod catalog_service;
 mod catalog;
 mod errors;
 mod link_service;
@@ -13,6 +14,7 @@ mod tests;
 
 pub use agent_link::{IronhubSharedKey, IronhubSharedKeyError};
 pub(crate) use capabilities::{extend_builtin_first_party_package, insert_handlers};
+pub(crate) use catalog_service::RebornIronHubCatalogService;
 pub(crate) use link_service::RebornIronhubLinkService;
 #[cfg(test)]
 pub(crate) use model::{

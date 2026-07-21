@@ -73,6 +73,7 @@ mod extension_onboarding;
 mod extension_setup_credentials;
 mod extensions;
 mod fs_browse;
+mod ironhub_catalog;
 mod ironhub_link;
 mod lifecycle_setup;
 mod llm_config;
@@ -111,6 +112,10 @@ use ironclaw_approvals::{
     PersistentApprovalPolicyInput, PersistentApprovalPolicyKey, PersistentApprovalPolicyStore,
     ToolPermissionOverride, ToolPermissionOverrideInput, ToolPermissionOverrideKey,
     ToolPermissionOverrideStore, ToolPermissionState, permission_mode_allows_persistent_approval,
+};
+pub use ironhub_catalog::{
+    IronHubCatalogService, IronHubCommand, IronHubCommandError, IronHubEntryKind,
+    IronHubInstallOptions,
 };
 pub use ironhub_link::{
     IronhubInstallDeliveryRequest, IronhubInstallDeliveryResult, IronhubLinkError,

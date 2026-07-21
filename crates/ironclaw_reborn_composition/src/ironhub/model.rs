@@ -1,6 +1,8 @@
 use std::time::Duration;
 
-use ironclaw_product_workflow::ProductWorkflowError;
+pub use ironclaw_product_workflow::{
+    IronHubCommand, IronHubCommandError, IronHubEntryKind, IronHubInstallOptions,
+};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -29,22 +31,6 @@ pub(super) const IRONHUB_CAPABILITY_IDS: [&str; 3] = [
     IRONHUB_INFO_CAPABILITY_ID,
     IRONHUB_INSTALL_CAPABILITY_ID,
 ];
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum IronHubEntryKind {
-    Tool,
-    Skill,
-}
-
-impl IronHubEntryKind {
-    pub(super) fn as_str(self) -> &'static str {
-        match self {
-            Self::Tool => "tool",
-            Self::Skill => "skill",
-        }
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -139,50 +125,6 @@ pub(super) struct IronHubArtifact {
     pub(super) url: String,
     pub(super) size_bytes: u64,
     pub(super) sha256: String,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct IronHubInstallOptions {
-    pub kind: Option<IronHubEntryKind>,
-    pub force: bool,
-    pub acknowledge_unverified: bool,
-    pub expected_version: Option<String>,
-    pub expected_artifact_digest: Option<String>,
-    pub private_manifest_url: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum IronHubCommand {
-    Search {
-        query: String,
-    },
-    List {
-        kind: Option<IronHubEntryKind>,
-    },
-    Info {
-        name: String,
-        kind: Option<IronHubEntryKind>,
-    },
-    Install {
-        name: String,
-        options: IronHubInstallOptions,
-    },
-}
-
-#[derive(Debug, Error)]
-pub enum IronHubCommandError {
-    #[error("IronHub is available only for local-dev Reborn services")]
-    LocalRuntimeUnavailable,
-    #[error("IronHub runtime HTTP egress is unavailable")]
-    RuntimeHttpEgressUnavailable,
-    #[error("invalid IronHub input: {reason}")]
-    InvalidInput { reason: String },
-    #[error("IronHub catalog failed: {reason}")]
-    Catalog { reason: String },
-    #[error("IronHub install failed: {reason}")]
-    Install { reason: String },
-    #[error("IronHub lifecycle failed: {0}")]
-    Product(#[from] ProductWorkflowError),
 }
 
 #[derive(Debug, Deserialize)]

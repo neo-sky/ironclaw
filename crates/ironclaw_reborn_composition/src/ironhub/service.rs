@@ -24,7 +24,7 @@ use crate::extension_host::lifecycle::{
 };
 use crate::factory::RebornServices;
 
-#[cfg(not(test))]
+#[cfg(not(any(test, feature = "test-support")))]
 use super::catalog::verify_signed_manifest;
 use super::catalog::{
     classify, classify_gate_and_digest, entry_matches, network_policy_for_url, package_ref,
@@ -138,7 +138,7 @@ pub(crate) struct IronHubService {
     scope: ResourceScope,
     manifest_url: String,
     catalog_host: Option<String>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     manifest_verify_keys: &'static [(&'static str, &'static str)],
 }
 
@@ -193,19 +193,19 @@ impl IronHubService {
             scope,
             catalog_host: manifest_host(&manifest_url),
             manifest_url,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             manifest_verify_keys: super::model::MANIFEST_VERIFY_KEYS,
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn with_manifest_url(mut self, manifest_url: impl Into<String>) -> Self {
         self.manifest_url = manifest_url.into();
         self.catalog_host = manifest_host(&self.manifest_url);
         self
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn with_manifest_verify_keys(
         mut self,
         manifest_verify_keys: &'static [(&'static str, &'static str)],
@@ -474,9 +474,9 @@ impl IronHubService {
             self.catalog_host.as_deref(),
         )?;
         let envelope = self.download_url(url, MAX_SIGNED_MANIFEST_BYTES).await?;
-        #[cfg(not(test))]
+        #[cfg(not(any(test, feature = "test-support")))]
         let verified_manifest = verify_signed_manifest(&envelope);
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         let verified_manifest =
             super::catalog::verify_signed_manifest_with_keys(&envelope, self.manifest_verify_keys);
         let bytes = verified_manifest.map_err(|reason| IronHubCommandError::Catalog {

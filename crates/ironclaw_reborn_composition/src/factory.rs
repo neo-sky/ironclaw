@@ -1307,7 +1307,7 @@ fn production_config(
 /// backend through `RebornStorageInput::HostedSingleTenantPostgres`; local-dev
 /// keeps its historical local filesystem/libSQL default.
 async fn build_local_runtime(input: RebornBuildInput) -> Result<RebornServices, RebornBuildError> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     let host_runtime_http_egress_for_test = input.host_runtime_http_egress_for_test.clone();
     #[cfg(any(test, feature = "test-support"))]
     let network_http_egress_for_test = input.network_http_egress_for_test.clone();
@@ -1857,7 +1857,7 @@ async fn build_local_runtime(input: RebornBuildInput) -> Result<RebornServices, 
         local_runtime.extension_registry = Arc::clone(&extension_registry);
         local_runtime.shared_extension_registry = Some(services.shared_extension_registry());
         let host_runtime_http_egress = services.host_runtime_http_egress_port();
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         let host_runtime_http_egress =
             host_runtime_http_egress_for_test.unwrap_or(host_runtime_http_egress);
         local_runtime.host_runtime_http_egress = host_runtime_http_egress;
@@ -4040,7 +4040,7 @@ async fn build_production_shaped(
         required_runtime_backends,
         require_runtime_http_egress,
         require_wasm_credentials,
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
             host_runtime_http_egress_for_test: _,
         #[cfg(any(test, feature = "test-support"))]
             network_http_egress_for_test: _,
