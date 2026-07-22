@@ -958,7 +958,7 @@ impl RebornLocalExtensionManagementPort {
         let _operation_guard = self.operation_lock.lock().await;
         if force
             && let Some(replacement) = self
-                .forced_replacement_state(available, &installation_id)
+                .forced_replacement_state(available, &installation_id, caller)
                 .await?
         {
             let owner = derive_owner(caller, &self.tenant_operator_user_id);
@@ -991,6 +991,7 @@ impl RebornLocalExtensionManagementPort {
         &self,
         available: &AvailableExtensionPackage,
         installation_id: &ExtensionInstallationId,
+        caller: &UserId,
     ) -> Result<Option<ForcedExtensionReplacement>, ProductWorkflowError> {
         let Some(installation) = self
             .installation_store
@@ -1000,6 +1001,13 @@ impl RebornLocalExtensionManagementPort {
         else {
             return Ok(None);
         };
+        ensure_caller_may_operate(&installation, caller)?;
+        ensure_caller_may_mutate_tenant_installation(
+            &installation,
+            caller,
+            &self.tenant_operator_user_id,
+            "replace",
+        )?;
         if installation.extension_id() != &available.package.id {
             return Err(ProductWorkflowError::InvalidBindingRequest {
                 reason: format!(
@@ -1073,32 +1081,7 @@ impl RebornLocalExtensionManagementPort {
             return Err(error);
         }
         if let Err(error) = self.replace_lifecycle_package(&available.package).await {
-            if let Err(restore_error) = self.restore_active_publication(
-                &replacement.lifecycle_package,
-                replacement.previous_state,
-            ) {
-                return Err(compensation_failure(
-                    "extension force install failed to update lifecycle package and active publication restore failed",
-                    error,
-                    restore_error,
-                ));
-            }
-            if let Err(restore_error) = self
-                .installation_store
-                .set_activation_state(
-                    replacement.installation.installation_id(),
-                    replacement.previous_state,
-                )
-                .await
-                .map_err(map_extension_installation_error)
-            {
-                return Err(compensation_failure(
-                    "extension force install failed to update lifecycle package and activation restore failed",
-                    error,
-                    restore_error,
-                ));
-            }
-            return Err(error);
+            return self.rollback_forced_replacement(replacement, error).await;
         }
         if let Err(error) = self
             .clear_materialized_extension_files(&replacement.files.root)
@@ -9165,6 +9148,52 @@ output_schema_ref = "schemas/run.output.json"
             .expect("read manifest")
             .expect("manifest remains");
         assert_eq!(manifest.manifest_hash(), Some(&old_hash));
+    }
+
+    #[tokio::test]
+    async fn extension_force_install_lifecycle_failure_restores_replaced_package() {
+        let rival_manifest = fixture_extension_manifest()
+            .replace("id = \"fixture\"", "id = \"rival\"")
+            .replace("fixture.search", "rival.search")
+            .replace("fixture.write", "rival.write");
+        let rival = fixture_extension_package_from_manifest_with_root(&rival_manifest, "rival");
+        let rival_capability = rival.package.capabilities[0].clone();
+        let (_dir, _storage_root, port, _active_registry, _installation_store) =
+            extension_management_port_fixture_with_catalog_and_service(
+                AvailableExtensionCatalog::from_packages(vec![fixture_extension_package(), rival]),
+                ExtensionLifecycleService::new(ExtensionRegistry::new()),
+            );
+        let fixture_ref = LifecyclePackageRef::new(LifecyclePackageKind::Extension, "fixture")
+            .expect("valid ref");
+        port.install(fixture_ref.clone(), &lifecycle_owner())
+            .await
+            .expect("install fixture");
+        port.install(
+            LifecyclePackageRef::new(LifecyclePackageKind::Extension, "rival").expect("valid ref"),
+            &lifecycle_owner(),
+        )
+        .await
+        .expect("install rival");
+        port.activate(
+            fixture_ref,
+            ExtensionActivationMode::Static,
+            &lifecycle_owner(),
+        )
+        .await
+        .expect("activate fixture");
+
+        let mut colliding =
+            fixture_extension_package_with_description("Colliding fixture extension");
+        colliding.package.capabilities.push(rival_capability);
+        port.install_available_package(&colliding, true, &lifecycle_owner())
+            .await
+            .expect_err("capability collision fails the lifecycle install");
+
+        let replacement =
+            fixture_extension_package_with_description("Replacement fixture extension");
+        port.install_available_package(&replacement, true, &lifecycle_owner())
+            .await
+            .expect("replaced package survived the failed lifecycle install");
     }
 
     #[tokio::test]

@@ -70,6 +70,11 @@ fn map_local_skill_management_error(
         RebornLocalSkillManagementError::InvalidContext { reason } => {
             RebornSkillListError::InvalidRequest { reason }
         }
+        RebornLocalSkillManagementError::ProtectedSkill { name } => {
+            RebornSkillListError::InvalidRequest {
+                reason: format!("skill {name} was not installed from a catalog"),
+            }
+        }
         RebornLocalSkillManagementError::Skill(error) => map_skill_management_error(error),
     }
 }

@@ -162,19 +162,35 @@ impl RebornLocalSkillManagementPort {
         Ok(remove_skill(&context, SkillRemoveRequest { name }).await?)
     }
 
+    /// Refuses hand-authored skills sharing a catalog name: the replacement
+    /// path keeps no backup, so clobbering one is unrecoverable.
     pub(crate) async fn remove_if_installed(
         &self,
         name: &str,
     ) -> Result<ironclaw_skills::SkillRemoveResult, RebornLocalSkillManagementError> {
         let context = self.skill_context_for_scope(self.owner_scope()?)?;
-        match remove_skill(&context, SkillRemoveRequest { name }).await {
-            Ok(result) => Ok(result),
-            Err(error) if error.kind() == SkillManagementErrorKind::NotFound => {
-                Ok(ironclaw_skills::SkillRemoveResult {
-                    name: name.to_string(),
-                })
+        let existing = list_skills(&context)
+            .await?
+            .into_iter()
+            .find(|skill| skill.name == name);
+        match existing {
+            None => Ok(ironclaw_skills::SkillRemoveResult {
+                name: name.to_string(),
+            }),
+            Some(skill) if skill.source == ironclaw_skills::ManagedSkillSource::Installed => {
+                match remove_skill(&context, SkillRemoveRequest { name }).await {
+                    Ok(result) => Ok(result),
+                    Err(error) if error.kind() == SkillManagementErrorKind::NotFound => {
+                        Ok(ironclaw_skills::SkillRemoveResult {
+                            name: name.to_string(),
+                        })
+                    }
+                    Err(error) => Err(error.into()),
+                }
             }
-            Err(error) => Err(error.into()),
+            Some(_) => Err(RebornLocalSkillManagementError::ProtectedSkill {
+                name: name.to_string(),
+            }),
         }
     }
 }
@@ -183,6 +199,8 @@ impl RebornLocalSkillManagementPort {
 pub(crate) enum RebornLocalSkillManagementError {
     #[error("invalid skill management context: {reason}")]
     InvalidContext { reason: String },
+    #[error("skill {name} was not installed from a catalog and will not be replaced")]
+    ProtectedSkill { name: String },
     #[error("skill management failed: {0:?}")]
     Skill(SkillManagementError),
 }
@@ -696,6 +714,11 @@ fn map_local_skill_management_error(
         RebornLocalSkillManagementError::InvalidContext { reason } => {
             ProductWorkflowError::InvalidBindingRequest { reason }
         }
+        RebornLocalSkillManagementError::ProtectedSkill { name } => {
+            ProductWorkflowError::InvalidBindingRequest {
+                reason: format!("skill {name} was not installed from a catalog"),
+            }
+        }
         RebornLocalSkillManagementError::Skill(error) => map_skill_error(error),
     }
 }
@@ -709,6 +732,53 @@ mod tests {
         VirtualPath,
     };
     use ironclaw_product_workflow::LifecycleProductSurfaceContext;
+
+    #[tokio::test]
+    async fn remove_if_installed_refuses_hand_authored_skill() {
+        let (_dir, _storage_root, port) = skill_port_fixture();
+        port.install_for_scope(
+            port.owner_scope().expect("owner scope"),
+            Some("shared-name"),
+            "---\nname: shared-name\ndescription: hand authored\n---\nAuthored locally.\n",
+        )
+        .await
+        .expect("install hand-authored skill");
+
+        let error = port
+            .remove_if_installed("shared-name")
+            .await
+            .expect_err("hand-authored skill must not be replaced");
+
+        assert!(matches!(
+            error,
+            RebornLocalSkillManagementError::ProtectedSkill { .. }
+        ));
+        let surviving = port
+            .read_content_for_scope(port.owner_scope().expect("owner scope"), "shared-name")
+            .await
+            .expect("hand-authored skill survives");
+        assert!(surviving.content.contains("Authored locally."));
+    }
+
+    #[tokio::test]
+    async fn remove_if_installed_replaces_catalog_installed_skill() {
+        let (_dir, _storage_root, port) = skill_port_fixture();
+        port.install_from_url(
+            Some("hub-skill"),
+            "---\nname: hub-skill\ndescription: catalog skill\n---\nFrom the catalog.\n",
+            "https://example.com/hub-skill/SKILL.md",
+        )
+        .await
+        .expect("install catalog skill");
+
+        port.remove_if_installed("hub-skill")
+            .await
+            .expect("catalog-installed skill is replaceable");
+
+        port.read_content_for_scope(port.owner_scope().expect("owner scope"), "hub-skill")
+            .await
+            .expect_err("catalog skill removed");
+    }
 
     #[tokio::test]
     async fn skill_lifecycle_facade_installs_lists_and_removes_via_skill_management() {
@@ -1013,6 +1083,16 @@ mod tests {
         std::path::PathBuf,
         RebornLocalLifecycleFacade,
     ) {
+        let (dir, storage_root, skill_management) = skill_port_fixture();
+        let facade = RebornLocalLifecycleFacade::new(skill_management);
+        (dir, storage_root, facade)
+    }
+
+    fn skill_port_fixture() -> (
+        tempfile::TempDir,
+        std::path::PathBuf,
+        Arc<RebornLocalSkillManagementPort>,
+    ) {
         let dir = tempfile::tempdir().expect("tempdir");
         let storage_root = dir.path().join("local-dev");
         std::fs::create_dir_all(&storage_root).expect("storage root");
@@ -1041,8 +1121,7 @@ mod tests {
             ])
             .expect("valid mount view"),
         ));
-        let facade = RebornLocalLifecycleFacade::new(skill_management);
-        (dir, storage_root, facade)
+        (dir, storage_root, skill_management)
     }
 
     fn skill_content(name: &str) -> String {

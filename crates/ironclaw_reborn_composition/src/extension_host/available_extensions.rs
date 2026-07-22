@@ -1679,9 +1679,12 @@ where
         if reserved_host_bundled_extension_id(&extension_id) {
             continue;
         }
+        // Reserved first-party ids never reach here, so a `HostBundled` record
+        // for a discovered id can only be stale or forged state (#5459).
         let manifest_source = manifest_sources
             .get(&entry.name)
             .copied()
+            .filter(|source| *source != ManifestSource::HostBundled)
             .unwrap_or(ManifestSource::InstalledLocal);
         match load_filesystem_package(fs, entry, &host_ports, &contracts, manifest_source).await {
             Ok(Some(package)) => packages.push(package),
@@ -3128,6 +3131,25 @@ output_schema_ref = "schemas/search.output.json"
         assert_eq!(
             results[0].summary().source,
             ironclaw_product_workflow::LifecycleExtensionSource::Registry
+        );
+
+        let mut laundered_sources = BTreeMap::new();
+        laundered_sources.insert("fixture".to_string(), ManifestSource::HostBundled);
+
+        let clamped = AvailableExtensionCatalog::from_filesystem_root_with_manifest_sources(
+            &fs,
+            &VirtualPath::new("/system/extensions").unwrap(),
+            &laundered_sources,
+        )
+        .await
+        .unwrap();
+        let clamped_results = clamped.search("fixture").collect::<Vec<_>>();
+
+        assert_eq!(clamped_results.len(), 1);
+        assert_eq!(
+            clamped_results[0].package.manifest.source,
+            ManifestSource::InstalledLocal,
+            "a discovered extension must never inherit host-bundled trust (#5459)"
         );
     }
 

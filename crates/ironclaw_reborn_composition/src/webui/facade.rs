@@ -774,6 +774,14 @@ fn skill_info(skill: ironclaw_skills::SkillSummary) -> RebornSkillInfo {
 fn map_skill_management_error(error: RebornLocalSkillManagementError) -> RebornServicesError {
     match error {
         RebornLocalSkillManagementError::InvalidContext { .. } => internal_skill_error(),
+        RebornLocalSkillManagementError::ProtectedSkill { .. } => RebornServicesError {
+            code: RebornServicesErrorCode::Conflict,
+            kind: RebornServicesErrorKind::Conflict,
+            status_code: 409,
+            retryable: false,
+            field: None,
+            validation_code: None,
+        },
         RebornLocalSkillManagementError::Skill(error) => match error.kind() {
             ironclaw_skills::SkillManagementErrorKind::NotFound => RebornServicesError {
                 code: RebornServicesErrorCode::NotFound,

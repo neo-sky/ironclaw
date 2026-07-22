@@ -114,8 +114,12 @@ use ironclaw_approvals::{
     ToolPermissionOverrideStore, ToolPermissionState, permission_mode_allows_persistent_approval,
 };
 pub use ironhub_catalog::{
-    IronHubCatalogService, IronHubCommand, IronHubCommandError, IronHubEntryKind,
-    IronHubInstallOptions,
+    IronHubArtifact, IronHubArtifactHosts, IronHubCommand, IronHubCommandError, IronHubEntryKind,
+    IronHubInstallOptions, IronHubManifest, IronHubProvenance, IronHubSkillEntry, IronHubToolEntry,
+    classify, classify_gate_and_digest, entry_matches, ironhub_catalog_error,
+    ironhub_install_error, ironhub_invalid_input, ironhub_package_ref, ironhub_product_error,
+    network_policy_for_url, skill_summary, tool_summary, validate_artifact, validate_artifact_url,
+    validate_hub_name,
 };
 pub use ironhub_link::{
     IronhubInstallDeliveryRequest, IronhubInstallDeliveryResult, IronhubLinkError,

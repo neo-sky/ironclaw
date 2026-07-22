@@ -133,8 +133,6 @@ struct InstallInput {
     #[serde(default)]
     kind: Option<IronHubEntryKind>,
     #[serde(default)]
-    force: bool,
-    #[serde(default)]
     expected_version: Option<String>,
     #[serde(default)]
     expected_artifact_digest: Option<String>,
@@ -174,10 +172,9 @@ impl FirstPartyCapabilityHandler for IronHubCapabilityHandler {
     }
 }
 
-/// Maps a model-invoked capability request onto an [`IronHubCommand`]. Model
-/// callers reach the public catalog only: they cannot name a private manifest
-/// and cannot waive the unverified-provenance gate, so both options are fixed
-/// here rather than read from the model-supplied input.
+/// Model callers install new public-catalog entries only, so the private
+/// manifest, unverified-provenance and force options are host-fixed here
+/// instead of being read from model-supplied input.
 fn model_invoked_command(
     capability_id: &str,
     input: serde_json::Value,
@@ -200,7 +197,7 @@ fn model_invoked_command(
                 name: input.name,
                 options: IronHubInstallOptions {
                     kind: input.kind,
-                    force: input.force,
+                    force: false,
                     acknowledge_unverified: false,
                     expected_version: input.expected_version,
                     expected_artifact_digest: input.expected_artifact_digest,
@@ -241,10 +238,6 @@ mod tests {
     use super::*;
 
     /// Mirrors `extension_lifecycle_capabilities_declare_behavior_neutral_origin_gate_matrix`.
-    /// No IronHub capability is read-only enough for the reviewed Ungated
-    /// allowlist: search and info reach the network, install also writes the
-    /// filesystem. All three gate for `LoopRun`; Product/Automation are
-    /// deny-by-default until a reviewed ingress slice declares a producer.
     #[test]
     fn ironhub_capabilities_declare_behavior_neutral_origin_gate_matrix() {
         let manifests = capability_manifests().expect("ironhub capability manifests build");
@@ -281,10 +274,8 @@ mod tests {
         }
     }
 
-    /// The model-invoked install path must not be able to reach a private
-    /// manifest or waive the unverified-provenance gate, even when the model
-    /// supplies those fields. Both are host-fixed; only the signed deep-link
-    /// and the operator CLI may set them.
+    /// A forced install replaces installed code and re-derives its owner, so it
+    /// stays an operator action on the CLI.
     #[test]
     fn model_invoked_install_cannot_reach_private_manifest_or_waive_verification() {
         let command = model_invoked_command(
@@ -302,7 +293,10 @@ mod tests {
             panic!("install capability must map to an install command");
         };
         assert_eq!(name, "some-tool");
-        assert!(options.force, "force is model-settable");
+        assert!(
+            !options.force,
+            "model input must not force a replacement over an installed package"
+        );
         assert_eq!(
             options.private_manifest_url, None,
             "model input must not reach a private manifest"

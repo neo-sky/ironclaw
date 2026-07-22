@@ -101,8 +101,8 @@ pub use ironclaw_auth::GoogleOAuthRouteConfig;
 /// test — the type must travel through this facade instead.
 pub use ironclaw_auth::OAuthRedirectUri;
 pub use ironclaw_product_workflow::{
-    IronHubCatalogService, LifecycleExtensionSource, LifecycleExtensionSummary, LifecyclePhase,
-    LifecycleProductPayload, LifecycleProductResponse, LifecycleSearchExtensionSummary,
+    LifecycleExtensionSource, LifecycleExtensionSummary, LifecyclePhase, LifecycleProductPayload,
+    LifecycleProductResponse, LifecycleSearchExtensionSummary,
 };
 pub use ironclaw_runner::runtime::DEFAULT_TURN_RUNNER_WORKER_COUNT;
 // Re-exported for `ironclaw_reborn_cli` (`runtime/mod.rs` turn-failure display):
@@ -122,7 +122,7 @@ pub use ironclaw_triggers::TriggerId;
 pub use ironclaw_turns::TurnStatus;
 pub use ironhub::{
     IronHubCommand, IronHubCommandError, IronHubEntryKind, IronHubInstallOptions, IronhubSharedKey,
-    IronhubSharedKeyError, RebornIronHubCatalogService, render_reborn_ironhub_response,
+    IronhubSharedKeyError, execute_reborn_ironhub_command, render_reborn_ironhub_response,
 };
 pub use ironhub_link_serve::{IronhubRegisterRouteState, ironhub_register_route_mount};
 pub use llm_admin::llm_catalog::{

@@ -7,11 +7,11 @@ use crate::extension_host::available_extensions::{
     surface_kinds_from_manifest_record,
 };
 
-use super::catalog::{package_ref, validate_hub_name};
 use super::errors::install_error;
 use super::model::{
     GENERIC_TOOL_INPUT_SCHEMA, GENERIC_TOOL_OUTPUT_SCHEMA, IronHubCommandError, IronHubToolEntry,
 };
+use ironclaw_product_workflow::{ironhub_package_ref as package_ref, validate_hub_name};
 
 pub(super) fn ironhub_tool_package(
     entry: &IronHubToolEntry,

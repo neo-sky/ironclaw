@@ -26,10 +26,6 @@ use crate::factory::RebornServices;
 
 #[cfg(not(any(test, feature = "test-support")))]
 use super::catalog::verify_signed_manifest;
-use super::catalog::{
-    classify, classify_gate_and_digest, entry_matches, network_policy_for_url, package_ref,
-    skill_summary, tool_summary, validate_artifact, validate_artifact_url, validate_hub_name,
-};
 use super::errors::{catalog_error, invalid_input, product_error};
 use super::model::{
     DEFAULT_IRONHUB_MANIFEST_URL, IronHubArtifact, IronHubCommand, IronHubCommandError,
@@ -38,6 +34,11 @@ use super::model::{
     MAX_SIGNED_MANIFEST_BYTES, MAX_WASM_BYTES,
 };
 use super::package::ironhub_tool_package;
+use ironclaw_product_workflow::{
+    IronHubArtifactHosts, classify, classify_gate_and_digest, entry_matches,
+    ironhub_package_ref as package_ref, network_policy_for_url, skill_summary, tool_summary,
+    validate_artifact, validate_artifact_url, validate_hub_name,
+};
 
 struct CachedManifest {
     manifest: Arc<IronHubManifest>,
@@ -53,7 +54,7 @@ static MANIFEST_LAST_SEEN: LazyLock<std::sync::Mutex<HashMap<String, DateTime<Ut
 static INSTALL_LOCKS: LazyLock<std::sync::Mutex<HashMap<String, Arc<AsyncMutex<()>>>>> =
     LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
 
-pub(crate) async fn execute_reborn_ironhub_command(
+pub async fn execute_reborn_ironhub_command(
     services: &RebornServices,
     command: IronHubCommand,
 ) -> Result<LifecycleProductResponse, IronHubCommandError> {
@@ -137,7 +138,7 @@ pub(crate) struct IronHubService {
     egress: IronHubEgress,
     scope: ResourceScope,
     manifest_url: String,
-    catalog_host: Option<String>,
+    hosts: IronHubArtifactHosts,
     #[cfg(any(test, feature = "test-support"))]
     manifest_verify_keys: &'static [(&'static str, &'static str)],
 }
@@ -191,7 +192,7 @@ impl IronHubService {
             extension_management,
             egress,
             scope,
-            catalog_host: manifest_host(&manifest_url),
+            hosts: artifact_hosts(&manifest_url),
             manifest_url,
             #[cfg(any(test, feature = "test-support"))]
             manifest_verify_keys: super::model::MANIFEST_VERIFY_KEYS,
@@ -201,7 +202,7 @@ impl IronHubService {
     #[cfg(test)]
     pub(crate) fn with_manifest_url(mut self, manifest_url: impl Into<String>) -> Self {
         self.manifest_url = manifest_url.into();
-        self.catalog_host = manifest_host(&self.manifest_url);
+        self.hosts = artifact_hosts(&self.manifest_url);
         self
     }
 
@@ -467,12 +468,7 @@ impl IronHubService {
         &self,
         url: &str,
     ) -> Result<IronHubManifest, IronHubCommandError> {
-        validate_artifact_url(
-            "hub-manifest",
-            "manifest_url",
-            url,
-            self.catalog_host.as_deref(),
-        )?;
+        validate_artifact_url("hub-manifest", "manifest_url", url, &self.hosts)?;
         let envelope = self.download_url(url, MAX_SIGNED_MANIFEST_BYTES).await?;
         #[cfg(not(any(test, feature = "test-support")))]
         let verified_manifest = verify_signed_manifest(&envelope);
@@ -500,7 +496,7 @@ impl IronHubService {
         artifact: &IronHubArtifact,
         max_bytes: u64,
     ) -> Result<Vec<u8>, IronHubCommandError> {
-        validate_artifact(artifact, max_bytes, self.catalog_host.as_deref())?;
+        validate_artifact(artifact, max_bytes, &self.hosts)?;
         let bytes = self.download_url(&artifact.url, max_bytes).await?;
         let actual = sha256_hex(&bytes);
         if !actual.eq_ignore_ascii_case(&artifact.sha256) {
@@ -527,7 +523,7 @@ impl IronHubService {
             url: url.to_string(),
             headers: Vec::new(),
             body: Vec::new(),
-            network_policy: network_policy_for_url(url, max_bytes, self.catalog_host.as_deref())?,
+            network_policy: network_policy_for_url(url, max_bytes, &self.hosts)?,
             credential_injections: Vec::new(),
             response_body_limit: Some(max_bytes),
             save_body_to: None,
@@ -569,16 +565,25 @@ fn resolve_manifest_url() -> String {
         .unwrap_or_else(|| DEFAULT_IRONHUB_MANIFEST_URL.to_string())
 }
 
-fn manifest_host(url: &str) -> Option<String> {
-    let host = url::Url::parse(url)
+fn artifact_hosts(manifest_url: &str) -> IronHubArtifactHosts {
+    let catalog_host = url::Url::parse(manifest_url)
         .ok()
         .and_then(|parsed| parsed.host_str().map(str::to_string));
-    if host.is_none() {
+    if catalog_host.is_none() {
         tracing::debug!(
             "ironhub manifest url has no parseable host; catalog host pinning disabled"
         );
     }
-    host
+    IronHubArtifactHosts::new(catalog_host, operator_artifact_hosts())
+}
+
+fn operator_artifact_hosts() -> Vec<String> {
+    // silent-ok: an unset operator allowlist means no extra artifact hosts.
+    std::env::var("IRONHUB_EXTRA_ARTIFACT_HOSTS")
+        .unwrap_or_default()
+        .split(',')
+        .map(str::to_string)
+        .collect()
 }
 
 fn manifest_cache_get(url: &str, now: Instant) -> Option<Arc<IronHubManifest>> {

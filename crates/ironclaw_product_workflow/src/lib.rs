@@ -171,8 +171,9 @@ pub use reborn_services::{
     AutomationProductFacade, ChannelConnectionFacade, CodexLoginStart,
     ConnectableChannelsProductFacade, ExtensionCredentialSetupService,
     ExtensionCredentialStatusRequest, ExtensionCredentialSubmitRequest, FilesystemBrowseReader,
-    FsMount, InboundAttachmentLander, InboundAttachmentReader, IronHubCatalogService,
-    IronHubCommand, IronHubCommandError, IronHubEntryKind, IronHubInstallOptions,
+    FsMount, InboundAttachmentLander, InboundAttachmentReader, IronHubArtifact,
+    IronHubArtifactHosts, IronHubCommand, IronHubCommandError, IronHubEntryKind,
+    IronHubInstallOptions, IronHubManifest, IronHubProvenance, IronHubSkillEntry, IronHubToolEntry,
     IronhubInstallDeliveryRequest, IronhubInstallDeliveryResult, IronhubLinkError,
     IronhubLinkService, IronhubRegisterRequest, LOGS_VIEW, LlmActiveSelection, LlmConfigService,
     LlmConfigServiceError, LlmConfigSnapshot, LlmModelsResult, LlmProbeRequest, LlmProbeResult,
@@ -238,8 +239,11 @@ pub use reborn_services::{
     StaticConnectableChannelsProductFacade, StaticOperatorStatusService, TriggerRunThreadScope,
     UnsupportedAutomationProductFacade, UnsupportedOperatorLogsService,
     UnsupportedOperatorServiceLifecycleService, UnsupportedOperatorStatusService,
-    UnsupportedOutboundPreferencesProductFacade, UpsertLlmProviderRequest,
-    ironhub_link_unavailable, map_ironhub_link_error, normalize_operator_log_context_value,
+    UnsupportedOutboundPreferencesProductFacade, UpsertLlmProviderRequest, classify,
+    classify_gate_and_digest, entry_matches, ironhub_catalog_error, ironhub_install_error,
+    ironhub_invalid_input, ironhub_link_unavailable, ironhub_package_ref, ironhub_product_error,
+    map_ironhub_link_error, network_policy_for_url, normalize_operator_log_context_value,
+    skill_summary, tool_summary, validate_artifact, validate_artifact_url, validate_hub_name,
 };
 
 pub use webui_inbound::{

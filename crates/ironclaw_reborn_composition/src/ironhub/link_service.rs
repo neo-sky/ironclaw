@@ -333,10 +333,8 @@ mod tests {
         ));
     }
 
-    /// A correct HMAC proves authenticity, not single use. This drives the
-    /// replay guard through `deliver_install` itself rather than the helper, so
-    /// a reordering that ran the install before consuming the nonce would fail
-    /// here. The request is rejected before any catalog egress.
+    /// Drives the replay guard through `deliver_install` rather than the helper,
+    /// so a reordering that installed before consuming the nonce would fail here.
     #[tokio::test]
     async fn deliver_install_rejects_replayed_nonce_on_a_correctly_signed_request() {
         let dir = tempfile::tempdir().expect("tempdir");
