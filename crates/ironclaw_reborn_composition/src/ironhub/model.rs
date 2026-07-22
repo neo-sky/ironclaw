@@ -4,7 +4,6 @@ pub use ironclaw_product_workflow::{
     IronHubCommand, IronHubCommandError, IronHubEntryKind, IronHubInstallOptions,
 };
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
 
 pub(crate) const DEFAULT_IRONHUB_MANIFEST_URL: &str =
     "https://hub.ironclaw.com/api/catalog/manifest.json";

@@ -1,8 +1,11 @@
+use std::sync::Arc;
+
 use anyhow::Context;
 use clap::{Args, Subcommand, ValueEnum};
 use ironclaw_reborn_composition::{
-    IronHubCommand as RebornIronHubCommand, IronHubEntryKind, IronHubInstallOptions,
-    build_reborn_services, execute_reborn_ironhub_command, render_reborn_ironhub_response,
+    IronHubCatalogService, IronHubCommand as RebornIronHubCommand, IronHubEntryKind,
+    IronHubInstallOptions, RebornIronHubCatalogService, build_reborn_services,
+    render_reborn_ironhub_response,
 };
 
 use crate::context::RebornCliContext;
@@ -203,7 +206,8 @@ fn execute_ironhub_command(
         let services = build_reborn_services(runtime_services.services_input)
             .await
             .context("failed to assemble Reborn services for IronHub command")?;
-        execute_reborn_ironhub_command(&services, command)
+        RebornIronHubCatalogService::new(Arc::new(services))
+            .execute(command)
             .await
             .map_err(anyhow::Error::from)
     })

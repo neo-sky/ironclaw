@@ -6,8 +6,8 @@ use ironclaw_extensions::{
     CapabilityManifest, CapabilityVisibility, ExtensionError, ExtensionPackage,
 };
 use ironclaw_host_api::{
-    CapabilityId, CapabilityProfileSchemaRef, EffectKind, HostPortId, PermissionMode,
-    ResourceEstimate, ResourceProfile, ResourceUsage, RuntimeDispatchErrorKind,
+    CapabilityId, CapabilityProfileSchemaRef, EffectKind, HostPortId, OriginGateMatrix,
+    PermissionMode, ResourceEstimate, ResourceProfile, ResourceUsage, RuntimeDispatchErrorKind,
 };
 use ironclaw_host_runtime::{
     FirstPartyCapabilityError, FirstPartyCapabilityHandler, FirstPartyCapabilityRegistry,
@@ -105,6 +105,7 @@ fn capability_manifest(
             },
             hard_ceiling: None,
         }),
+        origin_gate_matrix: Some(OriginGateMatrix::builtin_loop_run_seed(id)),
     })
 }
 
@@ -152,47 +153,14 @@ impl FirstPartyCapabilityHandler for IronHubCapabilityHandler {
             ));
         };
         let capability_id = request.capability_id.clone();
+        let command = model_invoked_command(capability_id.as_str(), request.input)?;
         let service = IronHubService::new_with_runtime_egress(
             Arc::clone(&self.skill_management),
             Arc::clone(&self.extension_management),
             runtime_http_egress,
-            capability_id.clone(),
+            capability_id,
             request.scope,
         );
-        let command = match capability_id.as_str() {
-            IRONHUB_SEARCH_CAPABILITY_ID => {
-                let input: SearchInput = parse_capability_input(request.input)?;
-                IronHubCommand::Search { query: input.query }
-            }
-            IRONHUB_INFO_CAPABILITY_ID => {
-                let input: InfoInput = parse_capability_input(request.input)?;
-                IronHubCommand::Info {
-                    name: input.name,
-                    kind: input.kind,
-                }
-            }
-            IRONHUB_INSTALL_CAPABILITY_ID => {
-                let input: InstallInput = parse_capability_input(request.input)?;
-                IronHubCommand::Install {
-                    name: input.name,
-                    options: IronHubInstallOptions {
-                        kind: input.kind,
-                        force: input.force,
-                        acknowledge_unverified: false,
-                        expected_version: input.expected_version,
-                        expected_artifact_digest: input.expected_artifact_digest,
-                        // Private-manifest installs stay on the signed deep-link and
-                        // CLI paths; model-invoked installs use the public catalog.
-                        private_manifest_url: None,
-                    },
-                }
-            }
-            _ => {
-                return Err(FirstPartyCapabilityError::new(
-                    RuntimeDispatchErrorKind::UndeclaredCapability,
-                ));
-            }
-        };
         let response = service.execute(command).await.map_err(capability_error)?;
         let output = serde_json::to_value(response)
             .map_err(|_| FirstPartyCapabilityError::new(RuntimeDispatchErrorKind::OutputDecode))?;
@@ -203,6 +171,46 @@ impl FirstPartyCapabilityHandler for IronHubCapabilityHandler {
                 ..ResourceUsage::default()
             },
         ))
+    }
+}
+
+/// Maps a model-invoked capability request onto an [`IronHubCommand`]. Model
+/// callers reach the public catalog only: they cannot name a private manifest
+/// and cannot waive the unverified-provenance gate, so both options are fixed
+/// here rather than read from the model-supplied input.
+fn model_invoked_command(
+    capability_id: &str,
+    input: serde_json::Value,
+) -> Result<IronHubCommand, FirstPartyCapabilityError> {
+    match capability_id {
+        IRONHUB_SEARCH_CAPABILITY_ID => {
+            let input: SearchInput = parse_capability_input(input)?;
+            Ok(IronHubCommand::Search { query: input.query })
+        }
+        IRONHUB_INFO_CAPABILITY_ID => {
+            let input: InfoInput = parse_capability_input(input)?;
+            Ok(IronHubCommand::Info {
+                name: input.name,
+                kind: input.kind,
+            })
+        }
+        IRONHUB_INSTALL_CAPABILITY_ID => {
+            let input: InstallInput = parse_capability_input(input)?;
+            Ok(IronHubCommand::Install {
+                name: input.name,
+                options: IronHubInstallOptions {
+                    kind: input.kind,
+                    force: input.force,
+                    acknowledge_unverified: false,
+                    expected_version: input.expected_version,
+                    expected_artifact_digest: input.expected_artifact_digest,
+                    private_manifest_url: None,
+                },
+            })
+        }
+        _ => Err(FirstPartyCapabilityError::new(
+            RuntimeDispatchErrorKind::UndeclaredCapability,
+        )),
     }
 }
 
@@ -224,4 +232,126 @@ fn capability_error(error: IronHubCommandError) -> FirstPartyCapabilityError {
         | IronHubCommandError::Product(_) => RuntimeDispatchErrorKind::OperationFailed,
     };
     FirstPartyCapabilityError::new(kind)
+}
+
+#[cfg(test)]
+mod tests {
+    use ironclaw_host_api::{OriginGatePolicy, UNGATED_LOOP_RUN_CAPABILITIES};
+
+    use super::*;
+
+    /// Mirrors `extension_lifecycle_capabilities_declare_behavior_neutral_origin_gate_matrix`.
+    /// No IronHub capability is read-only enough for the reviewed Ungated
+    /// allowlist: search and info reach the network, install also writes the
+    /// filesystem. All three gate for `LoopRun`; Product/Automation are
+    /// deny-by-default until a reviewed ingress slice declares a producer.
+    #[test]
+    fn ironhub_capabilities_declare_behavior_neutral_origin_gate_matrix() {
+        let manifests = capability_manifests().expect("ironhub capability manifests build");
+        assert_eq!(manifests.len(), IRONHUB_CAPABILITY_IDS.len());
+        for manifest in &manifests {
+            let matrix = manifest
+                .origin_gate_matrix
+                .as_ref()
+                .unwrap_or_else(|| panic!("{} must declare an origin_gate_matrix", manifest.id));
+            assert_eq!(
+                matrix.product,
+                OriginGatePolicy::Forbidden,
+                "{}",
+                manifest.id
+            );
+            assert_eq!(
+                matrix.automation,
+                OriginGatePolicy::Forbidden,
+                "{}",
+                manifest.id
+            );
+            assert_eq!(
+                matrix.loop_run,
+                OriginGatePolicy::GatedUnlessGranted,
+                "{}",
+                manifest.id
+            );
+        }
+        for id in IRONHUB_CAPABILITY_IDS {
+            assert!(
+                !UNGATED_LOOP_RUN_CAPABILITIES.contains(&id),
+                "{id} must not be in the Ungated allowlist"
+            );
+        }
+    }
+
+    /// The model-invoked install path must not be able to reach a private
+    /// manifest or waive the unverified-provenance gate, even when the model
+    /// supplies those fields. Both are host-fixed; only the signed deep-link
+    /// and the operator CLI may set them.
+    #[test]
+    fn model_invoked_install_cannot_reach_private_manifest_or_waive_verification() {
+        let command = model_invoked_command(
+            IRONHUB_INSTALL_CAPABILITY_ID,
+            serde_json::json!({
+                "name": "some-tool",
+                "force": true,
+                "private_manifest_url": "https://hub.ironclaw.com/private/manifest.json",
+                "acknowledge_unverified": true,
+            }),
+        )
+        .expect("install input maps");
+
+        let IronHubCommand::Install { name, options } = command else {
+            panic!("install capability must map to an install command");
+        };
+        assert_eq!(name, "some-tool");
+        assert!(options.force, "force is model-settable");
+        assert_eq!(
+            options.private_manifest_url, None,
+            "model input must not reach a private manifest"
+        );
+        assert!(
+            !options.acknowledge_unverified,
+            "model input must not waive the unverified-provenance gate"
+        );
+    }
+
+    #[test]
+    fn model_invoked_search_and_info_map_to_catalog_reads() {
+        let search = model_invoked_command(
+            IRONHUB_SEARCH_CAPABILITY_ID,
+            serde_json::json!({ "query": "wasm" }),
+        )
+        .expect("search input maps");
+        assert!(matches!(search, IronHubCommand::Search { query } if query == "wasm"));
+
+        let info = model_invoked_command(
+            IRONHUB_INFO_CAPABILITY_ID,
+            serde_json::json!({ "name": "some-skill", "kind": "skill" }),
+        )
+        .expect("info input maps");
+        assert!(matches!(
+            info,
+            IronHubCommand::Info { name, kind }
+                if name == "some-skill" && kind == Some(IronHubEntryKind::Skill)
+        ));
+    }
+
+    #[test]
+    fn model_invoked_unknown_capability_is_rejected() {
+        let error =
+            model_invoked_command("builtin.ironhub_not_a_capability", serde_json::json!({}))
+                .expect_err("unknown capability id must be rejected");
+        assert_eq!(
+            error.kind(),
+            Some(RuntimeDispatchErrorKind::UndeclaredCapability)
+        );
+    }
+
+    #[test]
+    fn model_invoked_malformed_input_is_rejected() {
+        let error = model_invoked_command(
+            IRONHUB_INSTALL_CAPABILITY_ID,
+            serde_json::json!({ "force": true }),
+        )
+        .expect_err("install input without a name must be rejected");
+        assert_eq!(error.kind(), Some(RuntimeDispatchErrorKind::InputEncode));
+    }
 }

@@ -13,12 +13,12 @@ use super::service::execute_reborn_ironhub_command;
 /// policy (signature verification, artifact validation, lifecycle transitions)
 /// is reached through the services this holds; this type only adapts the
 /// product port onto them.
-pub(crate) struct RebornIronHubCatalogService {
+pub struct RebornIronHubCatalogService {
     services: Arc<RebornServices>,
 }
 
 impl RebornIronHubCatalogService {
-    pub(crate) fn new(services: Arc<RebornServices>) -> Self {
+    pub fn new(services: Arc<RebornServices>) -> Self {
         Self { services }
     }
 }

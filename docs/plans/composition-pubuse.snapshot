@@ -28,8 +28,8 @@ pub use input::{OAuthClientConfig, RebornBuildInput, RebornRuntimeProcessBinding
 pub use ironclaw_auth::GoogleOAuthRouteConfig;
 pub use ironclaw_auth::OAuthRedirectUri;
 pub use ironclaw_product_workflow::{
-    LifecycleExtensionSource, LifecycleExtensionSummary, LifecyclePhase, LifecycleProductPayload,
-    LifecycleProductResponse, LifecycleSearchExtensionSummary,
+    IronHubCatalogService, LifecycleExtensionSource, LifecycleExtensionSummary, LifecyclePhase,
+    LifecycleProductPayload, LifecycleProductResponse, LifecycleSearchExtensionSummary,
 };
 pub use ironclaw_runner::runtime::DEFAULT_TURN_RUNNER_WORKER_COUNT;
 pub use ironclaw_runner::failure_summary::reborn_failure_summary_for_category;
@@ -44,7 +44,7 @@ pub use ironclaw_triggers::TriggerId;
 pub use ironclaw_turns::TurnStatus;
 pub use ironhub::{
     IronHubCommand, IronHubCommandError, IronHubEntryKind, IronHubInstallOptions, IronhubSharedKey,
-    IronhubSharedKeyError, execute_reborn_ironhub_command, render_reborn_ironhub_response,
+    IronhubSharedKeyError, RebornIronHubCatalogService, render_reborn_ironhub_response,
 };
 pub use ironhub_link_serve::{IronhubRegisterRouteState, ironhub_register_route_mount};
 pub use llm_admin::llm_catalog::{

@@ -10,7 +10,7 @@ use super::model::{
     IronHubProvenance, IronHubSkillEntry, IronHubToolEntry, SignedManifestEnvelope,
 };
 
-#[cfg(not(test))]
+#[cfg(not(any(test, feature = "test-support")))]
 pub(super) fn verify_signed_manifest(envelope_bytes: &[u8]) -> Result<Vec<u8>, String> {
     verify_signed_manifest_with_keys(envelope_bytes, super::model::MANIFEST_VERIFY_KEYS)
 }

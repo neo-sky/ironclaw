@@ -332,4 +332,23 @@ mod tests {
             Err(IronhubLinkError::InvalidSignature)
         ));
     }
+
+    /// A correct HMAC proves authenticity, not single use. This drives the
+    /// replay guard through `deliver_install` itself rather than the helper, so
+    /// a reordering that ran the install before consuming the nonce would fail
+    /// here. The request is rejected before any catalog egress.
+    #[tokio::test]
+    async fn deliver_install_rejects_replayed_nonce_on_a_correctly_signed_request() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let service = build_link_service(dir.path()).await;
+        let mut request = install_request(now_ts(), "nonce-deliver-install-replay", String::new());
+        request.sig = sign(&install_payload(&request));
+        reject_replayed_nonce(&request.nonce).expect("first delivery records the nonce");
+
+        let user_id = UserId::new("user-1").expect("user id");
+        assert!(matches!(
+            service.deliver_install(user_id, request).await,
+            Err(IronhubLinkError::Replay)
+        ));
+    }
 }

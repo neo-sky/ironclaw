@@ -53,7 +53,7 @@ static MANIFEST_LAST_SEEN: LazyLock<std::sync::Mutex<HashMap<String, DateTime<Ut
 static INSTALL_LOCKS: LazyLock<std::sync::Mutex<HashMap<String, Arc<AsyncMutex<()>>>>> =
     LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
 
-pub async fn execute_reborn_ironhub_command(
+pub(crate) async fn execute_reborn_ironhub_command(
     services: &RebornServices,
     command: IronHubCommand,
 ) -> Result<LifecycleProductResponse, IronHubCommandError> {
@@ -198,14 +198,14 @@ impl IronHubService {
         }
     }
 
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(test)]
     pub(crate) fn with_manifest_url(mut self, manifest_url: impl Into<String>) -> Self {
         self.manifest_url = manifest_url.into();
         self.catalog_host = manifest_host(&self.manifest_url);
         self
     }
 
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(test)]
     pub(crate) fn with_manifest_verify_keys(
         mut self,
         manifest_verify_keys: &'static [(&'static str, &'static str)],
