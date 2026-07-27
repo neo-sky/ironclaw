@@ -124,6 +124,9 @@ url = "2"
 uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
+ed25519-dalek = "2"
+base64 = "0.22"
+ironclaw_ironhub = { path = "../ironclaw_ironhub", features = ["test-support"] }
 ironclaw_extension_host = { path = "../ironclaw_extension_host", features = ["test-support"] }
 # DEL-7: composition no longer links first-party extensions in production; the
 # binary injects them as neutral data. The dev-dependency stays so the crate's

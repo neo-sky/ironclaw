@@ -1430,6 +1430,22 @@ fn approval_turn_locator_unavailable() -> ironclaw_product::ProductSurfaceFailur
 }
 
 impl RebornRuntime {
+    pub fn owner_user_id(&self) -> &UserId {
+        &self.owner_user_id
+    }
+
+    pub fn runtime_http_egress(&self) -> Option<Arc<dyn RuntimeHttpEgress>> {
+        self.runtime_http_egress.clone()
+    }
+
+    pub fn skill_management(&self) -> Arc<ScopedSkillManagementPort> {
+        Arc::clone(&self.skill_management)
+    }
+
+    pub fn extension_management(&self) -> Arc<RebornLocalExtensionManagementPort> {
+        Arc::clone(&self.extension_management)
+    }
+
     pub fn readiness(&self) -> &RebornReadiness {
         &self.readiness
     }

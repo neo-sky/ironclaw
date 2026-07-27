@@ -102,7 +102,7 @@ use ironclaw_extension_host::{
 };
 use ironclaw_extensions::{
     ExtensionInstallationStore, ExtensionInstallationStorePort, ExtensionLifecycleService,
-    ExtensionRegistry, SharedExtensionRegistry,
+    ExtensionPackage, ExtensionRegistry, SharedExtensionRegistry,
 };
 use ironclaw_filesystem::LibSqlRootFilesystem;
 use ironclaw_filesystem::PostgresRootFilesystem;
@@ -3104,6 +3104,7 @@ fn insert_native_memory_package(registry: &mut ExtensionRegistry) -> Result<(), 
 
 fn production_builtin_extension_registry(
     process_backend: ProcessBackendKind,
+    first_party_registrars: &[Arc<dyn ironclaw_extension_host::FirstPartyHandlerRegistrar>],
 ) -> Result<ExtensionRegistry, RebornBuildError> {
     let mut registry = ExtensionRegistry::new();
     let package =
@@ -3112,11 +3113,30 @@ fn production_builtin_extension_registry(
                 reason: format!("built-in first-party package is invalid: {error}"),
             }
         })?;
-    let package = extend_builtin_first_party_package(package).map_err(|error| {
+    let mut package = extend_builtin_first_party_package(package).map_err(|error| {
         RebornBuildError::InvalidConfig {
             reason: format!("extension lifecycle package is invalid: {error}"),
         }
     })?;
+    for registrar in first_party_registrars {
+        let manifests =
+            registrar
+                .capability_manifests()
+                .map_err(|error| RebornBuildError::InvalidConfig {
+                    reason: format!("host-bundled capability manifests are invalid: {error}"),
+                })?;
+        if manifests.is_empty() {
+            continue;
+        }
+        package.manifest.capabilities.extend(manifests);
+        package =
+            ExtensionPackage::from_manifest(package.manifest, package.root).map_err(|error| {
+                RebornBuildError::InvalidConfig {
+                    reason: format!("host-bundled first-party package is invalid: {error}"),
+                }
+            })?;
+    }
+    let package = package;
     let package = extend_builtin_admin_configuration_package(package).map_err(|error| {
         RebornBuildError::InvalidConfig {
             reason: format!("administrator configuration package is invalid: {error}"),
@@ -4608,7 +4628,8 @@ async fn build_backend_production(
     let outbound_delivery_targets = host_owned_outbound_delivery_target_registry()?;
     let skill_auto_activate_learned = Arc::new(AtomicBool::new(true));
     let process_backend = production_wiring.runtime_policy.process_backend;
-    let extension_registry = production_builtin_extension_registry(process_backend)?;
+    let extension_registry =
+        production_builtin_extension_registry(process_backend, &first_party_registrars)?;
     let extension_registry = Arc::new(extension_registry);
     let BudgetSinks {
         budget_event_sink,
@@ -4882,24 +4903,6 @@ async fn build_backend_production(
         ),
     ));
     services = attach_wasm_runtime(services)?;
-    // Install every binary-assembled first-party capability handler (GSuite,
-    // web tooling) through the generic registrar seam (extension-runtime DEL-7).
-    // Composition owns the loop and the shared context; the concrete executors
-    // live in the assembling binary.
-    let first_party_registrar_context = FirstPartyRegistrarContext {
-        credential_account_service: product_auth_dependencies.credential_account_service(),
-        credential_account_record_source: product_auth_dependencies
-            .credential_account_record_source(),
-        product_auth_runtime_ports: product_auth_runtime_ports.clone(),
-        oauth_backend_configured: google_oauth_configured,
-    };
-    for registrar in &first_party_registrars {
-        registrar
-            .register(&mut first_party_registry, &first_party_registrar_context)
-            .map_err(|error| RebornBuildError::InvalidConfig {
-                reason: format!("first-party capability handlers are invalid: {error}"),
-            })?;
-    }
     let extensions_root = VirtualPath::new("/system/extensions")?;
     #[cfg(any(test, feature = "test-support"))]
     let filesystem_catalog = if trust_fixture_extensions_for_test {
@@ -5196,9 +5199,22 @@ async fn build_backend_production(
     );
     let runtime_http_egress = Some(product_auth_runtime_ports.runtime_http_egress());
     let host_runtime_http_egress = services.host_runtime_http_egress_port();
-    // The first-party capability handlers were installed above through the
-    // binary-supplied `first_party_registrars` loop (extension-runtime DEL-7);
-    // composition names no concrete first-party executor here.
+    let first_party_registrar_context = FirstPartyRegistrarContext {
+        credential_account_service: product_auth_dependencies.credential_account_service(),
+        credential_account_record_source: product_auth_dependencies
+            .credential_account_record_source(),
+        product_auth_runtime_ports: product_auth_runtime_ports.clone(),
+        oauth_backend_configured: google_oauth_configured,
+        skill_management: Arc::clone(&skill_management),
+        extension_management: Arc::clone(&extension_management),
+    };
+    for registrar in &first_party_registrars {
+        registrar
+            .register(&mut first_party_registry, &first_party_registrar_context)
+            .map_err(|error| RebornBuildError::InvalidConfig {
+                reason: format!("first-party capability handlers are invalid: {error}"),
+            })?;
+    }
     insert_extension_lifecycle_handlers(
         &mut first_party_registry,
         Arc::clone(&extension_management),

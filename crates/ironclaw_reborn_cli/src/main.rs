@@ -4,6 +4,7 @@ mod context;
 mod dto;
 mod file_write;
 mod first_party;
+mod ironhub_host;
 mod operator_env;
 mod render;
 mod runtime;

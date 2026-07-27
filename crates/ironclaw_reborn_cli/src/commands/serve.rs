@@ -608,6 +608,9 @@ impl ServeCommand {
             if let Some(cli_login_mount) = cli_login_mount {
                 serve_config = serve_config.with_public_route_mount(cli_login_mount);
             }
+            if let Some(ironhub_mount) = crate::ironhub_host::link_route_mount(&runtime) {
+                serve_config = serve_config.with_public_route_mount(ironhub_mount);
+            }
             let webui_app = webui_v2_app_with_lifecycle(product_surface, serve_config)
                 .context("failed to compose v2 Router")?;
             let (router, public_route_drains) = webui_app.into_parts();

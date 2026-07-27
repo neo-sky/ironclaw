@@ -1,8 +1,12 @@
 use std::sync::Arc;
 
 use ironclaw_auth::{CredentialAccountRecordSource, CredentialAccountService};
+use ironclaw_extensions::{CapabilityManifest, ExtensionError};
 use ironclaw_host_api::{EffectKind, HostApiError};
 use ironclaw_host_runtime::{FirstPartyCapabilityRegistry, ProductAuthProviderRuntimePorts};
+use ironclaw_skills::ScopedSkillManagementPort;
+
+use crate::ExtensionLifecycleManager;
 
 /// Byte content of one asset shipped inside a first-party package.
 #[derive(Debug, Clone)]
@@ -58,6 +62,8 @@ pub struct FirstPartyRegistrarContext {
     /// time. Gates a pre-dispatch "not configured" tool result for handlers
     /// that need product-auth mediated accounts.
     pub oauth_backend_configured: bool,
+    pub skill_management: Arc<ScopedSkillManagementPort>,
+    pub extension_management: Arc<ExtensionLifecycleManager>,
 }
 
 /// Host-bundled capability handler installer.
@@ -67,4 +73,8 @@ pub trait FirstPartyHandlerRegistrar: Send + Sync {
         registry: &mut FirstPartyCapabilityRegistry,
         context: &FirstPartyRegistrarContext,
     ) -> Result<(), HostApiError>;
+
+    fn capability_manifests(&self) -> Result<Vec<CapabilityManifest>, ExtensionError> {
+        Ok(Vec::new())
+    }
 }

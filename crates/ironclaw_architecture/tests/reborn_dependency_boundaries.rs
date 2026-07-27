@@ -623,6 +623,7 @@ fn reborn_cli_binary_crate_stays_separate_from_v1_root() {
             "ironclaw_reborn_config",
             "ironclaw_reborn_traces",
             "ironclaw_webui",
+            "ironclaw_ironhub",
             "ironclaw_slack_extension",
             "ironclaw_telegram_extension",
         ],

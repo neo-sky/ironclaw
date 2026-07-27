@@ -29,6 +29,7 @@ pub(crate) use bundles::bundled_first_party_bundles;
 pub(crate) fn bundled_first_party_registrars() -> Vec<Arc<dyn FirstPartyHandlerRegistrar>> {
     vec![
         Arc::new(gsuite::GsuiteFirstPartyRegistrar),
+        Arc::new(ironclaw_ironhub::registrar::IronhubHandlerRegistrar),
         Arc::new(web_access::WebAccessFirstPartyRegistrar),
     ]
 }

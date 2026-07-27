@@ -33,6 +33,8 @@ mod error;
 mod factory;
 mod google_oauth_secret_store;
 mod input;
+#[cfg(test)]
+mod ironhub_integration_tests;
 mod llm_admin;
 mod local_dev_authorization;
 mod local_dev_mounts;
