@@ -3854,6 +3854,33 @@ fn workspace_ironclaw_crates(dependencies: &HashMap<String, Vec<String>>) -> Vec
         .collect()
 }
 
+#[test]
+fn ironhub_product_crate_stays_off_churn_heavy_host_crates() {
+    let metadata = cargo_metadata();
+    let packages = metadata["packages"]
+        .as_array()
+        .expect("cargo metadata must include packages");
+    let dependencies = packages
+        .iter()
+        .filter_map(package_dependencies)
+        .collect::<HashMap<_, _>>();
+
+    assert_workspace_deps_exactly(
+        &dependencies,
+        "ironclaw_ironhub",
+        [
+            "ironclaw_common",
+            "ironclaw_extension_host",
+            "ironclaw_extensions",
+            "ironclaw_host_api",
+            "ironclaw_host_ingress",
+            "ironclaw_host_runtime",
+            "ironclaw_skills",
+        ],
+        "ironclaw_ironhub is concrete product code that only the binary links (DEL-7). It must reach the host through stable contract crates only. Adding ironclaw_reborn_composition, ironclaw_product, or ironclaw_webui here couples the catalog feature to the workspace's highest-churn crates and reintroduces the merge conflicts this crate was extracted to avoid; consume those surfaces through ironclaw_extension_host or a Display-only error boundary instead.",
+    );
+}
+
 fn assert_workspace_deps_exactly<'a>(
     dependencies: &HashMap<String, Vec<String>>,
     crate_name: &str,

@@ -21,6 +21,7 @@ impl FirstPartyHandlerRegistrar for IronhubHandlerRegistrar {
             registry,
             Arc::clone(&context.skill_management),
             Arc::clone(&context.extension_management),
+            Arc::clone(&context.credential_accounts),
             default_artifact_hosts(),
         )
     }

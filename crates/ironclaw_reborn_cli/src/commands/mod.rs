@@ -34,6 +34,7 @@ pub(crate) enum Command {
     Doctor(doctor::DoctorCommand),
     /// Manage local Reborn extension lifecycle.
     Extension(extension::ExtensionCommand),
+    #[command(name = "ironhub")]
     IronHub(ironhub::IronHubCommand),
     /// Inspect configured Reborn hooks.
     Hooks(hooks::HooksCommand),

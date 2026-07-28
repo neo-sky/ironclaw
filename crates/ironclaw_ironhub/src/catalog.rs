@@ -1,4 +1,7 @@
-use ironclaw_host_api::{NetworkPolicy, NetworkScheme, NetworkTargetPattern, sha256_digest_token};
+use ironclaw_host_api::{
+    NetworkPolicy, NetworkScheme, NetworkTargetPattern, RuntimeCredentialRequirement,
+    sha256_digest_token,
+};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -96,6 +99,8 @@ pub struct IronHubToolEntry {
     pub provenance: IronHubProvenance,
     pub wasm: IronHubArtifact,
     pub capabilities: IronHubArtifact,
+    #[serde(default)]
+    pub runtime_credentials: Vec<RuntimeCredentialRequirement>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -127,6 +132,7 @@ pub struct IronHubInstallOptions {
     pub expected_version: Option<String>,
     pub expected_artifact_digest: Option<String>,
     pub private_manifest_url: Option<String>,
+    pub activate: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -621,6 +627,7 @@ mod tests {
             provenance: IronHubProvenance::Official,
             wasm: artifact(&"a".repeat(64)),
             capabilities: artifact(&"b".repeat(64)),
+            runtime_credentials: Vec::new(),
         };
         assert_eq!(
             tool_artifact_digest(&tool),

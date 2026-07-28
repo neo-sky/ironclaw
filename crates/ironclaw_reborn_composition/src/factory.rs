@@ -5207,6 +5207,7 @@ async fn build_backend_production(
         oauth_backend_configured: google_oauth_configured,
         skill_management: Arc::clone(&skill_management),
         extension_management: Arc::clone(&extension_management),
+        credential_accounts: product_auth_services.runtime_credential_account_selection_service(),
     };
     for registrar in &first_party_registrars {
         registrar

@@ -30,6 +30,9 @@ pub(crate) async fn execute_catalog_command(
         capability_id,
         scope,
         ironclaw_ironhub::default_artifact_hosts(),
+        runtime
+            .product_auth_services()
+            .runtime_credential_account_selection_service(),
     );
     service.execute(command).await
 }
@@ -45,6 +48,9 @@ pub(crate) fn link_route_mount(runtime: &RebornRuntime) -> Option<PublicRouteMou
         egress,
         shared_key,
         ironclaw_ironhub::default_artifact_hosts(),
+        runtime
+            .product_auth_services()
+            .runtime_credential_account_selection_service(),
     )
     .ok()?;
     Some(ironclaw_ironhub::link_route::link_route_mount(

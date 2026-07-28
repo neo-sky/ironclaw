@@ -1,5 +1,5 @@
 use ironclaw_host_api::{
-    LifecyclePackageRef, LifecycleSearchExtensionSummary, LifecycleSkillSummary,
+    InstallationState, LifecyclePackageRef, LifecycleSearchExtensionSummary, LifecycleSkillSummary,
 };
 
 use crate::catalog::IronHubEntryKind;
@@ -18,17 +18,40 @@ pub enum IronHubPayload {
         count: usize,
         tools: Vec<LifecycleSearchExtensionSummary>,
         skills: Vec<LifecycleSkillSummary>,
+        installed_tools: Vec<String>,
+        installed_skills: Vec<String>,
     },
     Installed {
         kind: IronHubEntryKind,
         name: String,
+        activation: IronHubActivation,
+        read_back: IronHubReadBack,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub enum IronHubActivation {
+    NotRequested,
+    NotApplicable,
+    Active,
+    Blocked {
+        phase: InstallationState,
+        blockers: Vec<&'static str>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub enum IronHubReadBack {
+    Confirmed { version: Option<String> },
+    Missing,
 }
 
 impl IronHubResponse {
     pub(crate) fn catalog(
         tools: Vec<LifecycleSearchExtensionSummary>,
         skills: Vec<LifecycleSkillSummary>,
+        installed_tools: Vec<String>,
+        installed_skills: Vec<String>,
     ) -> Self {
         Self {
             package_ref: None,
@@ -38,6 +61,8 @@ impl IronHubResponse {
                 count: tools.len() + skills.len(),
                 tools,
                 skills,
+                installed_tools,
+                installed_skills,
             },
         }
     }
@@ -47,12 +72,19 @@ impl IronHubResponse {
         kind: IronHubEntryKind,
         name: String,
         message: String,
+        activation: IronHubActivation,
+        read_back: IronHubReadBack,
     ) -> Self {
         Self {
             package_ref: Some(package_ref),
             installed: true,
             message: Some(message),
-            payload: IronHubPayload::Installed { kind, name },
+            payload: IronHubPayload::Installed {
+                kind,
+                name,
+                activation,
+                read_back,
+            },
         }
     }
 }

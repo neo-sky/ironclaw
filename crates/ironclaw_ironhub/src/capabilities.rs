@@ -15,7 +15,9 @@ use ironclaw_host_runtime::{
 };
 use serde::Deserialize;
 
-use ironclaw_extension_host::ExtensionLifecycleManager;
+use ironclaw_extension_host::{
+    ExtensionLifecycleManager, RuntimeCredentialAccountSelectionService,
+};
 use ironclaw_skills::ScopedSkillManagementPort;
 
 use crate::catalog::IronHubDefaultArtifactHosts;
@@ -40,11 +42,13 @@ pub fn insert_handlers(
     registry: &mut FirstPartyCapabilityRegistry,
     skill_management: Arc<ScopedSkillManagementPort>,
     extension_manager: Arc<ExtensionLifecycleManager>,
+    credential_accounts: Arc<dyn RuntimeCredentialAccountSelectionService>,
     default_artifact_hosts: IronHubDefaultArtifactHosts,
 ) -> Result<(), ironclaw_host_api::HostApiError> {
     let handler = Arc::new(IronHubCapabilityHandler {
         skill_management,
         extension_manager,
+        credential_accounts,
         default_artifact_hosts,
     });
     for capability_id in IRONHUB_CAPABILITY_IDS {
@@ -115,6 +119,7 @@ fn capability_manifest(
 struct IronHubCapabilityHandler {
     skill_management: Arc<ScopedSkillManagementPort>,
     extension_manager: Arc<ExtensionLifecycleManager>,
+    credential_accounts: Arc<dyn RuntimeCredentialAccountSelectionService>,
     default_artifact_hosts: IronHubDefaultArtifactHosts,
 }
 
@@ -163,6 +168,7 @@ impl FirstPartyCapabilityHandler for IronHubCapabilityHandler {
             capability_id,
             request.scope,
             self.default_artifact_hosts.clone(),
+            Arc::clone(&self.credential_accounts),
         );
         let response = service.execute(command).await.map_err(capability_error)?;
         let output = serde_json::to_value(response)
@@ -204,6 +210,7 @@ fn model_invoked_command(
                     expected_version: input.expected_version,
                     expected_artifact_digest: input.expected_artifact_digest,
                     private_manifest_url: None,
+                    activate: false,
                 },
             })
         }

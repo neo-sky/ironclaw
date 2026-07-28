@@ -67,13 +67,13 @@ section = "capability_provider.tools"
 [[capability_provider.tools.capabilities]]
 id = {capability_id}
 description = {description}
-effects = ["dispatch_capability", "network"]
+effects = {effects}
 default_permission = "ask"
 visibility = "model"
 input_schema_ref = {input_schema_ref}
 output_schema_ref = {output_schema_ref}
 required_host_ports = ["host.runtime.http_egress"]
-"#,
+{runtime_credentials}"#,
         id = toml_string(&entry.name),
         name = toml_string(&entry.name),
         version = toml_string(&entry.version),
@@ -82,7 +82,27 @@ required_host_ports = ["host.runtime.http_egress"]
         capability_id = toml_string(format!("{}.invoke", entry.name)),
         input_schema_ref = toml_string(format!("schemas/{}/invoke.input.v1.json", entry.name)),
         output_schema_ref = toml_string(format!("schemas/{}/raw_output.v1.json", entry.name)),
+        effects = effects_toml(entry),
+        runtime_credentials = runtime_credentials_toml(entry),
     )
+}
+
+fn effects_toml(entry: &IronHubToolEntry) -> &'static str {
+    if entry.runtime_credentials.is_empty() {
+        r#"["dispatch_capability", "network"]"#
+    } else {
+        r#"["dispatch_capability", "network", "use_secret"]"#
+    }
+}
+
+fn runtime_credentials_toml(entry: &IronHubToolEntry) -> String {
+    if entry.runtime_credentials.is_empty() {
+        return String::new();
+    }
+    match toml::Value::try_from(&entry.runtime_credentials) {
+        Ok(value) => format!("runtime_credentials = {value}\n"),
+        Err(_) => String::new(),
+    }
 }
 
 fn toml_string(value: impl Into<String>) -> String {
@@ -112,6 +132,7 @@ mod tests {
                 size_bytes: 1,
                 sha256: "b".repeat(64),
             },
+            runtime_credentials: Vec::new(),
         });
         let parsed: toml::Value = toml::from_str(&manifest).expect("manifest TOML parses");
         assert_eq!(parsed["id"].as_str(), Some("quote_tool"));

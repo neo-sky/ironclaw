@@ -3,7 +3,9 @@ use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use ironclaw_extension_host::ExtensionLifecycleManager;
+use ironclaw_extension_host::{
+    ExtensionLifecycleManager, RuntimeCredentialAccountSelectionService,
+};
 use ironclaw_host_api::{CapabilityId, InvocationId, ResourceScope, RuntimeHttpEgress, UserId};
 use ironclaw_skills::ScopedSkillManagementPort;
 
@@ -29,6 +31,7 @@ pub struct IronhubLinkServiceImpl {
     shared_key: IronhubSharedKey,
     install_capability: CapabilityId,
     default_artifact_hosts: IronHubDefaultArtifactHosts,
+    credential_accounts: Arc<dyn RuntimeCredentialAccountSelectionService>,
     catalog_source: Option<IronHubCatalogSource>,
 }
 
@@ -39,6 +42,7 @@ impl IronhubLinkServiceImpl {
         runtime_http_egress: Arc<dyn RuntimeHttpEgress>,
         shared_key: IronhubSharedKey,
         default_artifact_hosts: IronHubDefaultArtifactHosts,
+        credential_accounts: Arc<dyn RuntimeCredentialAccountSelectionService>,
     ) -> Result<Self, IronhubLinkError> {
         Ok(Self {
             skill_management,
@@ -51,6 +55,7 @@ impl IronhubLinkServiceImpl {
                 }
             })?,
             default_artifact_hosts,
+            credential_accounts,
             catalog_source: None,
         })
     }
@@ -69,6 +74,7 @@ impl IronhubLinkServiceImpl {
             self.install_capability.clone(),
             scope,
             self.default_artifact_hosts.clone(),
+            Arc::clone(&self.credential_accounts),
         );
         let service = match &self.catalog_source {
             Some(source) => service.with_catalog_source(source.clone()),
@@ -154,6 +160,7 @@ impl IronhubLinkService for IronhubLinkServiceImpl {
             expected_version: Some(request.version),
             expected_artifact_digest: Some(request.artifact_digest),
             private_manifest_url: request.private_manifest_url,
+            activate: false,
         };
         let response = self
             .install_service(user_id)?

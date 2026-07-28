@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use ironclaw_auth::product_auth::credentials::runtime_credentials::RuntimeCredentialAccountSelectionService;
 use ironclaw_auth::{CredentialAccountRecordSource, CredentialAccountService};
 use ironclaw_extensions::{CapabilityManifest, ExtensionError};
 use ironclaw_host_api::{EffectKind, HostApiError};
@@ -64,6 +65,7 @@ pub struct FirstPartyRegistrarContext {
     pub oauth_backend_configured: bool,
     pub skill_management: Arc<ScopedSkillManagementPort>,
     pub extension_management: Arc<ExtensionLifecycleManager>,
+    pub credential_accounts: Arc<dyn RuntimeCredentialAccountSelectionService>,
 }
 
 /// Host-bundled capability handler installer.

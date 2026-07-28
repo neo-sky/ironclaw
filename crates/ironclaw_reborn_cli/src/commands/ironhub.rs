@@ -96,6 +96,9 @@ struct InstallCommand {
     /// Install from a private-space signed manifest URL.
     #[arg(long)]
     private_manifest_url: Option<String>,
+    /// Activate the tool after installing it (tools only; skills are not activatable).
+    #[arg(long)]
+    activate: bool,
     #[arg(long)]
     json: bool,
 }
@@ -136,6 +139,7 @@ impl IronHubCommand {
                         expected_version: command.expected_version,
                         expected_artifact_digest: command.expected_artifact_digest,
                         private_manifest_url: command.private_manifest_url,
+                        activate: command.activate,
                     },
                 },
                 command.json,

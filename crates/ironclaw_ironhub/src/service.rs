@@ -4,10 +4,15 @@ use std::time::Instant;
 
 use chrono::{DateTime, Utc};
 use ironclaw_common::hashing::sha256_hex;
-use ironclaw_extension_host::ExtensionLifecycleManager;
+use ironclaw_extension_host::extension_activation_credentials::RuntimeExtensionActivationCredentialGate;
+use ironclaw_extension_host::{
+    ExtensionActivationMode, ExtensionLifecycleManager, RuntimeCredentialAccountSelectionService,
+};
 use ironclaw_host_api::{
-    CapabilityId, LifecyclePackageKind, NetworkMethod, ResourceScope, RuntimeHttpEgress,
-    RuntimeHttpEgressError, RuntimeHttpEgressRequest, RuntimeHttpEgressResponse, RuntimeKind,
+    CapabilityId, InstallationState, LifecyclePackageKind, LifecyclePackageRef,
+    LifecycleProductPayload, LifecycleReadinessBlocker, NetworkMethod, ResourceScope,
+    RuntimeHttpEgress, RuntimeHttpEgressError, RuntimeHttpEgressRequest, RuntimeHttpEgressResponse,
+    RuntimeKind,
 };
 use ironclaw_skills::ScopedSkillManagementPort;
 use tokio::sync::Mutex as AsyncMutex;
@@ -24,7 +29,7 @@ use crate::model::{
     MAX_MANIFEST_BYTES, MAX_METADATA_BYTES, MAX_SIGNED_MANIFEST_BYTES, MAX_WASM_BYTES,
 };
 use crate::package::ironhub_tool_bundle_zip;
-use crate::response::IronHubResponse;
+use crate::response::{IronHubActivation, IronHubReadBack, IronHubResponse};
 
 struct CachedManifest {
     manifest: Arc<IronHubManifest>,
@@ -67,6 +72,7 @@ pub struct IronHubService {
     hosts: IronHubArtifactHosts,
     default_hosts: IronHubDefaultArtifactHosts,
     manifest_verify_keys: &'static [(&'static str, &'static str)],
+    credential_accounts: Arc<dyn RuntimeCredentialAccountSelectionService>,
 }
 
 #[derive(Debug, Clone)]
@@ -83,6 +89,7 @@ impl IronHubService {
         capability_id: CapabilityId,
         scope: ResourceScope,
         default_hosts: IronHubDefaultArtifactHosts,
+        credential_accounts: Arc<dyn RuntimeCredentialAccountSelectionService>,
     ) -> Self {
         Self::new(
             skill_management,
@@ -93,6 +100,7 @@ impl IronHubService {
             },
             scope,
             default_hosts,
+            credential_accounts,
         )
     }
 
@@ -102,6 +110,7 @@ impl IronHubService {
         egress: IronHubEgress,
         scope: ResourceScope,
         default_hosts: IronHubDefaultArtifactHosts,
+        credential_accounts: Arc<dyn RuntimeCredentialAccountSelectionService>,
     ) -> Self {
         let manifest_url = resolve_manifest_url();
         Self {
@@ -113,6 +122,7 @@ impl IronHubService {
             default_hosts,
             manifest_url,
             manifest_verify_keys: crate::model::MANIFEST_VERIFY_KEYS,
+            credential_accounts,
         }
     }
 
@@ -150,7 +160,13 @@ impl IronHubService {
             .filter(|entry| entry_matches(&entry.name, &entry.description, &query))
             .map(skill_summary)
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(IronHubResponse::catalog(tools, skills))
+        let (installed_tools, installed_skills) = self.installed_catalog_names().await;
+        Ok(IronHubResponse::catalog(
+            tools,
+            skills,
+            installed_tools,
+            installed_skills,
+        ))
     }
 
     async fn list(
@@ -174,7 +190,13 @@ impl IronHubService {
                 .map(skill_summary)
                 .collect::<Result<Vec<_>, _>>()?,
         };
-        Ok(IronHubResponse::catalog(tools, skills))
+        let (installed_tools, installed_skills) = self.installed_catalog_names().await;
+        Ok(IronHubResponse::catalog(
+            tools,
+            skills,
+            installed_tools,
+            installed_skills,
+        ))
     }
 
     async fn info(
@@ -185,18 +207,29 @@ impl IronHubService {
         validate_hub_name(name)?;
         let manifest = self.fetch_manifest_cached(&self.manifest_url).await?;
         let kind = classify(&manifest, name, hint)?;
+        let (installed_tools, installed_skills) = self.installed_catalog_names().await;
         let response = match kind {
             IronHubEntryKind::Tool => {
                 let tool = manifest
                     .find_tool(name)
                     .ok_or_else(|| ironhub_catalog_error("tool not found"))?;
-                IronHubResponse::catalog(vec![tool_summary(tool)?], Vec::new())
+                IronHubResponse::catalog(
+                    vec![tool_summary(tool)?],
+                    Vec::new(),
+                    installed_tools,
+                    installed_skills,
+                )
             }
             IronHubEntryKind::Skill => {
                 let skill = manifest
                     .find_skill(name)
                     .ok_or_else(|| ironhub_catalog_error("skill not found"))?;
-                IronHubResponse::catalog(Vec::new(), vec![skill_summary(skill)?])
+                IronHubResponse::catalog(
+                    Vec::new(),
+                    vec![skill_summary(skill)?],
+                    installed_tools,
+                    installed_skills,
+                )
             }
         };
         Ok(response)
@@ -240,11 +273,14 @@ impl IronHubService {
                     provenance,
                     &artifact_digest,
                 );
+                let read_back = self.read_back_skill(&result.name).await;
                 Ok(IronHubResponse::installed(
                     package_ref(LifecyclePackageKind::Skill, &result.name)?,
                     IronHubEntryKind::Skill,
                     result.name,
                     message,
+                    IronHubActivation::NotApplicable,
+                    read_back,
                 ))
             }
             IronHubEntryKind::Tool => {
@@ -272,14 +308,114 @@ impl IronHubService {
                     provenance,
                     &artifact_digest,
                 );
+                let activation = if options.activate {
+                    self.activate_tool(tool_ref.clone()).await?
+                } else {
+                    IronHubActivation::NotRequested
+                };
+                let read_back = self.read_back_tool(&tool_ref).await;
                 Ok(IronHubResponse::installed(
                     tool_ref,
                     IronHubEntryKind::Tool,
                     entry.name.clone(),
                     message,
+                    activation,
+                    read_back,
                 ))
             }
         }
+    }
+
+    async fn installed_catalog_names(&self) -> (Vec<String>, Vec<String>) {
+        let tools = match self
+            .extension_manager
+            .list_installed(&self.scope.user_id)
+            .await
+        {
+            Ok(response) => match response.payload {
+                Some(LifecycleProductPayload::ExtensionList { extensions, .. }) => extensions
+                    .iter()
+                    .map(|entry| entry.summary.name.clone())
+                    .collect(),
+                _ => Vec::new(),
+            },
+            Err(_) => Vec::new(),
+        };
+        let skills = match self
+            .skill_management
+            .list_for_scope(self.scope.clone())
+            .await
+        {
+            Ok(summaries) => summaries
+                .iter()
+                .map(|summary| summary.name.clone())
+                .collect(),
+            Err(_) => Vec::new(),
+        };
+        (tools, skills)
+    }
+
+    async fn activate_tool(
+        &self,
+        tool_ref: LifecyclePackageRef,
+    ) -> Result<IronHubActivation, IronHubCommandError> {
+        let gate = RuntimeExtensionActivationCredentialGate::new(
+            self.scope.clone(),
+            Arc::clone(&self.credential_accounts),
+        );
+        let response = self
+            .extension_manager
+            .activate_with_credential_gate(
+                tool_ref,
+                ExtensionActivationMode::Static,
+                gate,
+                &self.scope.user_id,
+            )
+            .await
+            .map_err(|error| ironhub_install_error(error.to_string()))?;
+        if response.phase == InstallationState::Active {
+            return Ok(IronHubActivation::Active);
+        }
+        Ok(IronHubActivation::Blocked {
+            phase: response.phase,
+            blockers: response.blockers.iter().map(blocker_kind).collect(),
+        })
+    }
+
+    async fn read_back_tool(&self, tool_ref: &LifecyclePackageRef) -> IronHubReadBack {
+        let Ok(response) = self
+            .extension_manager
+            .list_installed(&self.scope.user_id)
+            .await
+        else {
+            return IronHubReadBack::Missing;
+        };
+        let Some(LifecycleProductPayload::ExtensionList { extensions, .. }) = response.payload
+        else {
+            return IronHubReadBack::Missing;
+        };
+        extensions
+            .iter()
+            .find(|installed| installed.summary.package_ref == *tool_ref)
+            .map(|installed| IronHubReadBack::Confirmed {
+                version: Some(installed.summary.version.clone()),
+            })
+            .unwrap_or(IronHubReadBack::Missing)
+    }
+
+    async fn read_back_skill(&self, name: &str) -> IronHubReadBack {
+        let Ok(summaries) = self
+            .skill_management
+            .list_for_scope(self.scope.clone())
+            .await
+        else {
+            return IronHubReadBack::Missing;
+        };
+        summaries
+            .iter()
+            .find(|summary| summary.name == name)
+            .map(|_| IronHubReadBack::Confirmed { version: None })
+            .unwrap_or(IronHubReadBack::Missing)
     }
 
     async fn fetch_manifest_cached(
@@ -373,6 +509,18 @@ impl IronHubService {
             return Err(ironhub_catalog_error("download exceeds size cap"));
         }
         Ok(response.body)
+    }
+}
+
+fn blocker_kind(blocker: &LifecycleReadinessBlocker) -> &'static str {
+    match blocker {
+        LifecycleReadinessBlocker::Setup { .. } => "setup",
+        LifecycleReadinessBlocker::Auth { .. } => "auth",
+        LifecycleReadinessBlocker::Pairing { .. } => "pairing",
+        LifecycleReadinessBlocker::Approval { .. } => "approval",
+        LifecycleReadinessBlocker::Policy { .. } => "policy",
+        LifecycleReadinessBlocker::Credential { .. } => "credential",
+        LifecycleReadinessBlocker::Runtime { .. } => "runtime",
     }
 }
 
