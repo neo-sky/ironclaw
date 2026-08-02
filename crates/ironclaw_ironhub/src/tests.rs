@@ -2318,3 +2318,306 @@ impl RuntimeHttpEgress for RecordingEgress {
         })
     }
 }
+
+mod version_index {
+    use crate::model::IronHubEntryKind;
+    use crate::versions::{
+        InstalledEntry, IronHubVersionEntry, IronHubVersionIndex, diff_installed,
+        validate_version_index, version_index_url,
+    };
+
+    fn index(entries: Vec<IronHubVersionEntry>) -> IronHubVersionIndex {
+        IronHubVersionIndex {
+            version: "1".to_string(),
+            generated_at: "2026-07-31T00:00:00.000Z".to_string(),
+            release_tag: "release-2026-07-31-1".to_string(),
+            repo: "nearai/ironhub".to_string(),
+            unchanged: false,
+            entries,
+        }
+    }
+
+    fn entry(kind: IronHubEntryKind, name: &str, version: &str) -> IronHubVersionEntry {
+        IronHubVersionEntry {
+            kind,
+            name: name.to_string(),
+            version: version.to_string(),
+            digest: format!("sha256:{}", "a".repeat(64)),
+        }
+    }
+
+    fn installed(kind: IronHubEntryKind, name: &str, version: &str) -> InstalledEntry {
+        InstalledEntry {
+            kind,
+            name: name.to_string(),
+            version: version.to_string(),
+        }
+    }
+
+    #[test]
+    fn version_index_url_follows_the_configured_catalog() {
+        assert_eq!(
+            version_index_url("https://hub.ironclaw.com/api/catalog/manifest.json").expect("url"),
+            "https://hub.ironclaw.com/api/catalog/versions.json"
+        );
+        assert_eq!(
+            version_index_url("https://staging.hub.ironclaw.com/api/catalog/manifest.json")
+                .expect("url"),
+            "https://staging.hub.ironclaw.com/api/catalog/versions.json"
+        );
+        assert_eq!(
+            version_index_url("https://hub.ironclaw.com/api/catalog/manifest.json?release=98")
+                .expect("url"),
+            "https://hub.ironclaw.com/api/catalog/versions.json?release=98"
+        );
+    }
+
+    #[test]
+    fn a_manifest_url_that_is_not_a_manifest_cannot_derive_an_index() {
+        assert!(version_index_url("https://hub.ironclaw.com/api/catalog/other.json").is_err());
+        assert!(version_index_url("https://hub.ironclaw.com/api/catalog/").is_err());
+        assert!(version_index_url("manifest.json").is_err());
+    }
+
+    #[test]
+    fn an_unsupported_index_version_is_rejected() {
+        let mut document = index(vec![]);
+        document.version = "2".to_string();
+        assert!(validate_version_index(&document).is_err());
+    }
+
+    #[test]
+    fn an_index_claiming_unchanged_may_not_carry_entries() {
+        let mut document = index(vec![entry(IronHubEntryKind::Tool, "attio", "0.1.0")]);
+        document.unchanged = true;
+        assert!(validate_version_index(&document).is_err());
+    }
+
+    #[test]
+    fn an_entry_without_a_digest_is_rejected() {
+        let mut document = index(vec![entry(IronHubEntryKind::Tool, "attio", "0.1.0")]);
+        document.entries[0].digest = String::new();
+        assert!(validate_version_index(&document).is_err());
+    }
+
+    #[test]
+    fn a_newer_catalog_version_is_reported_as_outdated() {
+        let document = index(vec![entry(IronHubEntryKind::Tool, "attio", "0.2.0")]);
+        let found = diff_installed(
+            &[installed(IronHubEntryKind::Tool, "attio", "0.1.0")],
+            &document,
+        );
+
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].installed_version, "0.1.0");
+        assert_eq!(found[0].catalog_version, "0.2.0");
+    }
+
+    #[test]
+    fn a_matching_version_is_not_reported() {
+        let document = index(vec![entry(IronHubEntryKind::Tool, "attio", "0.1.0")]);
+        assert!(
+            diff_installed(
+                &[installed(IronHubEntryKind::Tool, "attio", "0.1.0")],
+                &document
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_tool_and_a_skill_sharing_a_name_are_not_confused() {
+        let document = index(vec![
+            entry(IronHubEntryKind::Tool, "shared", "0.2.0"),
+            entry(IronHubEntryKind::Skill, "shared", "1.0.0"),
+        ]);
+        let found = diff_installed(
+            &[installed(IronHubEntryKind::Skill, "shared", "1.0.0")],
+            &document,
+        );
+
+        assert!(found.is_empty());
+    }
+
+    #[test]
+    fn an_installed_entry_the_catalog_dropped_is_not_reported() {
+        let document = index(vec![entry(IronHubEntryKind::Tool, "attio", "0.1.0")]);
+        assert!(
+            diff_installed(
+                &[installed(IronHubEntryKind::Tool, "retired", "0.1.0")],
+                &document
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn results_are_ordered_independently_of_installed_order() {
+        let document = index(vec![
+            entry(IronHubEntryKind::Tool, "zeta", "2.0.0"),
+            entry(IronHubEntryKind::Tool, "alpha", "2.0.0"),
+        ]);
+        let forward = diff_installed(
+            &[
+                installed(IronHubEntryKind::Tool, "zeta", "1.0.0"),
+                installed(IronHubEntryKind::Tool, "alpha", "1.0.0"),
+            ],
+            &document,
+        );
+        let backward = diff_installed(
+            &[
+                installed(IronHubEntryKind::Tool, "alpha", "1.0.0"),
+                installed(IronHubEntryKind::Tool, "zeta", "1.0.0"),
+            ],
+            &document,
+        );
+
+        assert_eq!(forward, backward);
+        assert_eq!(forward[0].name, "alpha");
+    }
+
+    #[test]
+    fn the_served_unchanged_reply_parses_and_validates() {
+        let document: IronHubVersionIndex = serde_json::from_str(
+            r#"{"version":"1","generated_at":"2026-07-31T15:40:10.866Z",
+                "release_tag":"release-2026-07-31-98","repo":"nearai/ironhub","unchanged":true}"#,
+        )
+        .expect("unchanged reply parses");
+
+        assert!(document.unchanged);
+        assert!(document.entries.is_empty());
+        assert!(validate_version_index(&document).is_ok());
+    }
+}
+
+mod outdated_response {
+    use crate::model::{IronHubEntryKind, IronHubOutdatedSummary, IronHubPhase, IronHubResponse};
+
+    fn summary(name: &str, installed: &str, catalog: &str) -> IronHubOutdatedSummary {
+        IronHubOutdatedSummary {
+            kind: IronHubEntryKind::Tool,
+            name: name.to_string(),
+            installed_version: installed.to_string(),
+            catalog_version: catalog.to_string(),
+        }
+    }
+
+    #[test]
+    fn an_outdated_response_counts_what_is_outdated_not_the_catalog() {
+        let response = IronHubResponse::outdated(vec![summary("attio", "0.1.0", "0.2.0")], 61);
+
+        assert_eq!(response.phase, IronHubPhase::Discovered);
+        assert_eq!(response.total_entries, 1);
+        assert_eq!(response.catalog_total, Some(61));
+        assert!(response.entries.is_empty());
+        assert_eq!(response.outdated.len(), 1);
+    }
+
+    #[test]
+    fn nothing_outdated_still_reports_the_catalog_size() {
+        let response = IronHubResponse::outdated(Vec::new(), 61);
+
+        assert_eq!(response.total_entries, 0);
+        assert_eq!(response.catalog_total, Some(61));
+        assert!(response.outdated.is_empty());
+    }
+
+    #[test]
+    fn the_outdated_field_is_omitted_when_empty() {
+        let response = IronHubResponse::outdated(Vec::new(), 61);
+        let wire = serde_json::to_string(&response).expect("serializes");
+
+        assert!(!wire.contains("outdated"));
+    }
+
+    #[test]
+    fn an_outdated_entry_carries_both_versions_on_the_wire() {
+        let response = IronHubResponse::outdated(vec![summary("attio", "0.1.0", "0.2.0")], 61);
+        let wire = serde_json::to_string(&response).expect("serializes");
+
+        assert!(wire.contains("\"installed_version\":\"0.1.0\""));
+        assert!(wire.contains("\"catalog_version\":\"0.2.0\""));
+    }
+}
+
+#[tokio::test]
+async fn outdated_reports_an_installed_skill_the_catalog_moved_past() {
+    let services = ironclaw_extension_host::lifecycle_test_support::build_lifecycle_test_services(
+        "ironhub-owner",
+        None,
+        false,
+    )
+    .await;
+    let scope =
+        ironclaw_extension_host::lifecycle_test_support::webui_gate_resource_scope_for_owner(
+            "ironhub-owner",
+        );
+    let manifest_url = "https://hub.ironclaw.com/tests/outdated/manifest.json";
+    let versions_url = "https://hub.ironclaw.com/tests/outdated/versions.json";
+    let skill_url = "https://hub.ironclaw.com/tests/outdated/SKILL.md";
+    let skill_bytes =
+        b"---\nname: moving-skill\nversion: 1.0.0\ndescription: Installed by IronHub\n---\n# Moving\n"
+            .to_vec();
+
+    let manifest_json = format!(
+        r#"{{"version":"1","generated_at":"2026-08-01T00:00:00Z",
+             "release_tag":"release-1","repo":"nearai/ironhub","tools":[],
+             "skills":[{{"name":"moving-skill","trunk":"","version":"1.0.0","provenance":"official","description":"Installed by IronHub",
+             "skill_md":{{"url":"{skill_url}","size_bytes":{size},"sha256":"{sha}"}}}}]}}"#,
+        size = skill_bytes.len(),
+        sha = sha256_hex(&skill_bytes),
+    );
+    let versions_json = r#"{"version":"1","generated_at":"2026-08-01T00:01:00Z",
+        "release_tag":"release-2","repo":"nearai/ironhub",
+        "entries":[{"kind":"skill","name":"moving-skill","version":"2.0.0","digest":"sha256:beef"}]}"#;
+
+    let egress = Arc::new(RecordingEgress::new([
+        (
+            manifest_url,
+            signed_manifest(manifest_json, &test_signing_key()),
+        ),
+        (
+            versions_url,
+            signed_manifest(versions_json.to_string(), &test_signing_key()),
+        ),
+        (skill_url, skill_bytes),
+    ]));
+    let service = configure_test_catalog(
+        IronHubService::new_with_runtime_egress(
+            Arc::clone(&services.skill_management),
+            Arc::clone(&services.extension_management),
+            egress.clone(),
+            scope.clone(),
+            CapabilityId::new(super::IRONHUB_INSTALL_CAPABILITY_ID).expect("capability id"),
+            test_link_state(),
+        ),
+        manifest_url,
+        test_manifest_verify_keys(),
+    );
+
+    service
+        .execute(IronHubCommand::Install {
+            name: "moving-skill".to_string(),
+            options: IronHubInstallOptions {
+                kind: Some(IronHubEntryKind::Skill),
+                ..IronHubInstallOptions::default()
+            },
+        })
+        .await
+        .expect("skill installs at 1.0.0");
+
+    let response = service
+        .execute(IronHubCommand::Outdated)
+        .await
+        .expect("outdated check runs");
+
+    let moved = response
+        .outdated
+        .iter()
+        .find(|entry| entry.name == "moving-skill")
+        .expect("the installed skill is reported as outdated");
+    assert_eq!(moved.installed_version, "1.0.0");
+    assert_eq!(moved.catalog_version, "2.0.0");
+    assert_eq!(moved.kind, IronHubEntryKind::Skill);
+    assert_eq!(response.catalog_total, Some(1));
+}

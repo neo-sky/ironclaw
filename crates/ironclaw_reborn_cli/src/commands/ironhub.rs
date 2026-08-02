@@ -29,6 +29,8 @@ enum IronHubSubcommand {
     Info(IronHubInfoCommand),
     /// Install an IronHub tool or skill into Reborn state.
     Install(IronHubInstallCommand),
+    /// Report installed entries the catalog has a newer version of.
+    Outdated(IronHubOutdatedCommand),
 }
 
 #[derive(Debug, Args)]
@@ -58,6 +60,13 @@ struct IronHubInfoCommand {
     #[arg(long, value_enum)]
     kind: Option<IronHubKindArg>,
     /// Output the response as JSON.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Debug, Args)]
+struct IronHubOutdatedCommand {
+    /// Emit the raw JSON response.
     #[arg(long)]
     json: bool,
 }
@@ -124,6 +133,9 @@ impl IronHubCommand {
                 command.json,
                 "info",
             ),
+            IronHubSubcommand::Outdated(command) => {
+                (RebornIronHubCommand::Outdated, command.json, "outdated")
+            }
             IronHubSubcommand::Install(command) => (
                 RebornIronHubCommand::Install {
                     name: command.name,

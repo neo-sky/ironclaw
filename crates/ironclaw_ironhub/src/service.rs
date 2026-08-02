@@ -34,11 +34,14 @@ use super::catalog::{
 };
 use super::model::{
     DEFAULT_IRONHUB_MANIFEST_URL, IronHubArtifact, IronHubCommand, IronHubCommandError,
-    IronHubEntryKind, IronHubInstallOptions, IronHubManifest, IronHubPhase, IronHubProvenance,
-    IronHubResponse, MANIFEST_CACHE_MAX_ENTRIES, MANIFEST_CACHE_TTL, MAX_MANIFEST_BYTES,
-    MAX_METADATA_BYTES, MAX_SIGNED_MANIFEST_BYTES, MAX_WASM_BYTES,
+    IronHubEntryKind, IronHubInstallOptions, IronHubManifest, IronHubOutdatedSummary, IronHubPhase,
+    IronHubProvenance, IronHubResponse, MANIFEST_CACHE_MAX_ENTRIES, MANIFEST_CACHE_TTL,
+    MAX_MANIFEST_BYTES, MAX_METADATA_BYTES, MAX_SIGNED_MANIFEST_BYTES, MAX_WASM_BYTES,
 };
 use super::package::ironhub_tool_package;
+use super::versions::{
+    InstalledEntry, IronHubVersionIndex, diff_installed, validate_version_index, version_index_url,
+};
 use crate::link_service::{IronhubLinkStateError, IronhubLinkStateStore};
 
 struct CachedManifest {
@@ -199,6 +202,7 @@ impl IronHubService {
             IronHubCommand::List { kind } => self.list(kind).await,
             IronHubCommand::Info { name, kind } => self.info(&name, kind).await,
             IronHubCommand::Install { name, options } => self.install(&name, options).await,
+            IronHubCommand::Outdated => self.outdated().await,
         }
     }
 
@@ -406,6 +410,7 @@ impl IronHubService {
             returned_entries: 1,
             truncated: false,
             catalog_total: None,
+            outdated: Vec::new(),
             message: Some(install_message(
                 kind,
                 name,
@@ -502,6 +507,81 @@ impl IronHubService {
             .await
             .map_err(map_link_state_error)?;
         Ok(manifest)
+    }
+
+    async fn outdated(&self) -> Result<IronHubResponse, IronHubCommandError> {
+        let index = self.fetch_version_index().await?;
+        let installed = self.installed_entries().await?;
+        let found = diff_installed(&installed, &index)
+            .into_iter()
+            .map(|entry| IronHubOutdatedSummary {
+                kind: entry.kind,
+                name: entry.name,
+                installed_version: entry.installed_version,
+                catalog_version: entry.catalog_version,
+            })
+            .collect();
+        Ok(IronHubResponse::outdated(found, index.entries.len()))
+    }
+
+    async fn installed_entries(&self) -> Result<Vec<InstalledEntry>, IronHubCommandError> {
+        let mut entries = Vec::new();
+
+        let skills = self
+            .skill_management
+            .list_for_scope(self.scope.clone())
+            .await
+            .map_err(|error| catalog(format!("listing installed skills failed: {error}")))?;
+        entries.extend(skills.into_iter().map(|skill| InstalledEntry {
+            kind: IronHubEntryKind::Skill,
+            name: skill.name,
+            version: skill.version,
+        }));
+
+        let extensions = self
+            .extension_management
+            .list_installed(&self.scope.user_id)
+            .await
+            .map_err(|error| catalog(format!("listing installed extensions failed: {error}")))?;
+        if let Some(LifecycleProductPayload::ExtensionList { extensions, .. }) = extensions.payload
+        {
+            entries.extend(extensions.into_iter().map(|installed| InstalledEntry {
+                kind: IronHubEntryKind::Tool,
+                name: installed.summary.name,
+                version: installed.summary.version,
+            }));
+        }
+
+        Ok(entries)
+    }
+
+    async fn fetch_version_index(&self) -> Result<IronHubVersionIndex, IronHubCommandError> {
+        let index_url = version_index_url(&self.manifest_url)?;
+        validate_artifact_url("hub-versions", "version_index_url", &index_url)?;
+        let envelope = self
+            .download_url(&index_url, MAX_SIGNED_MANIFEST_BYTES, None)
+            .await?;
+        let bytes = self.verify_manifest_envelope(&envelope)?;
+        if bytes.len() > usize::try_from(MAX_MANIFEST_BYTES).unwrap_or(usize::MAX) {
+            return Err(catalog("version index exceeds size cap"));
+        }
+        let index: IronHubVersionIndex =
+            serde_json::from_slice(&bytes).map_err(|error| IronHubCommandError::Catalog {
+                reason: format!("version index parse failed: {error}"),
+            })?;
+        validate_version_index(&index)?;
+        let generated_at = DateTime::parse_from_rfc3339(&index.generated_at)
+            .map_err(|error| {
+                catalog(format!(
+                    "version index generated_at is not RFC3339: {error}"
+                ))
+            })?
+            .with_timezone(&Utc);
+        self.link_state
+            .record_public_manifest(&index_url, generated_at, &sha256_hex(&bytes))
+            .await
+            .map_err(map_link_state_error)?;
+        Ok(index)
     }
 
     async fn fetch_private_manifest(
@@ -645,7 +725,7 @@ fn ironhub_command_capability_id(
     command: &IronHubCommand,
 ) -> Result<CapabilityId, IronHubCommandError> {
     let value = match command {
-        IronHubCommand::Search { .. } | IronHubCommand::List { .. } => {
+        IronHubCommand::Search { .. } | IronHubCommand::List { .. } | IronHubCommand::Outdated => {
             crate::IRONHUB_SEARCH_CAPABILITY_ID
         }
         IronHubCommand::Info { .. } => crate::IRONHUB_INFO_CAPABILITY_ID,

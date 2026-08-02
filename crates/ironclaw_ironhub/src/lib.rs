@@ -39,6 +39,7 @@ mod model;
 mod package;
 mod render;
 mod service;
+mod versions;
 
 #[cfg(test)]
 mod tests;

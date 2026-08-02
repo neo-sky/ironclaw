@@ -178,6 +178,15 @@ pub enum IronHubCommand {
         name: String,
         options: IronHubInstallOptions,
     },
+    Outdated,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IronHubOutdatedSummary {
+    pub kind: IronHubEntryKind,
+    pub name: String,
+    pub installed_version: String,
+    pub catalog_version: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -215,11 +224,27 @@ pub struct IronHubResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
     pub entries: Vec<IronHubEntrySummary>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub outdated: Vec<IronHubOutdatedSummary>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lifecycle: Option<LifecycleProductResponse>,
 }
 
 impl IronHubResponse {
+    pub(crate) fn outdated(found: Vec<IronHubOutdatedSummary>, catalog_total: usize) -> Self {
+        Self {
+            phase: IronHubPhase::Discovered,
+            total_entries: found.len(),
+            returned_entries: found.len(),
+            truncated: false,
+            catalog_total: Some(catalog_total),
+            message: None,
+            entries: Vec::new(),
+            outdated: found,
+            lifecycle: None,
+        }
+    }
+
     pub(crate) fn discovered(entries: Vec<IronHubEntrySummary>) -> Self {
         let total_entries = entries.len();
         Self {
@@ -230,6 +255,7 @@ impl IronHubResponse {
             catalog_total: None,
             message: None,
             entries,
+            outdated: Vec::new(),
             lifecycle: None,
         }
     }
@@ -295,6 +321,7 @@ impl IronHubResponse {
                 "INCOMPLETE IRONHUB RESULTS: returned {returned_entries} of {total_entries} matching catalog entries. Do not claim an unreturned package is absent; narrow the search query or call ironhub_info with its exact name."
             )),
             entries,
+            outdated: Vec::new(),
             lifecycle: None,
         }
     }

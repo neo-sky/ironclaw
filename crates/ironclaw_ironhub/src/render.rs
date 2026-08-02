@@ -53,6 +53,18 @@ pub fn render_reborn_ironhub_response(label: &str, response: &IronHubResponse) -
             );
         }
     }
+    for entry in &response.outdated {
+        push_line(
+            &mut output,
+            format_args!(
+                "- {} {} {} -> {}",
+                entry.kind.as_str(),
+                terminal_safe(&entry.name),
+                terminal_safe(&entry.installed_version),
+                terminal_safe(&entry.catalog_version)
+            ),
+        );
+    }
     output
 }
 
