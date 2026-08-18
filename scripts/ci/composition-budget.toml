@@ -230,7 +230,15 @@ observed_date = "2026-08-08"
 # all move to this figure together, per this file's own re-capture instruction.
 # Re-seeded 41991 -> 42143 on 2026-08-16: Mnesis provider wiring and the
 # lifecycle-retrieval projection, measured with --print, set to current.
-loc_ceiling = 42143
+# Re-seeded 42143 -> 42297 on 2026-08-18: the lifecycle trajectory observer was
+# split out of CapabilityTrajectoryObserver into its own trait, which adds the
+# second adapter accessor in observability/trajectory_observer.rs. The two
+# third-party provider arms in memory_provider_factory.rs were deduplicated onto
+# one bind_third_party helper in the same change, which paid part of it back.
+# Carving the arms out further was rejected deliberately: both provider tool
+# handlers and both connection configs live in composition today, so moving only
+# the Mnesis half would split a house pattern across two crates.
+loc_ceiling = 42297
 # Working slack for in-flight PRs. Deliberately small: the inflow this gate
 # exists to catch was +619 lines, and a tolerance that would have absorbed it
 # is a gate that constrains nothing. A change adding more than this to
@@ -241,8 +249,8 @@ loc_tolerance = 150
 loc_nudge_slack = 200
 # Informational — observed when this file was last updated. Not consulted for
 # the pass/fail decision.
-loc_observed = 42143
-loc_observed_date = "2026-08-16"
+loc_observed = 42297
+loc_observed_date = "2026-08-18"
 
 # --- Dispatch (Arc<dyn>) ratchet ------------------------------------------
 # A companion metric for the "reduce traits & dispatch" goal (issue #6168 / the

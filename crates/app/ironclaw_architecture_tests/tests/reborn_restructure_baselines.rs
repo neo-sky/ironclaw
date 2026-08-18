@@ -178,7 +178,10 @@ const WS0_COMPOSITION_SHARE_BP: usize = 658;
 /// to the same figure in this commit.
 /// Re-measured 41_991 -> 42_143 on 2026-08-16: Mnesis provider wiring and the
 /// lifecycle-retrieval projection, moved with the manifest in the same commit.
-const COMPOSITION_ABSOLUTE_SRC_LOC: usize = 42_143;
+/// Re-measured 42_143 -> 42_297 on 2026-08-18: the lifecycle trajectory observer
+/// became its own trait, adding the second adapter accessor; the two third-party
+/// provider arms were deduplicated onto one helper in the same change.
+const COMPOSITION_ABSOLUTE_SRC_LOC: usize = 42_297;
 
 /// Composition dispatch, from the same `--print` run: "composition dispatch:
 /// 827 Arc<dyn> (governed prod, excl slack/extension_host)".
